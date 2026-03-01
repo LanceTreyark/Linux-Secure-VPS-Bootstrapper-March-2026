@@ -14,15 +14,10 @@
 #
 # 1. SSH into your VPS as root using the IP address and root password provided by your hosting provider.
 # - Example: ssh root@your_vps_ip
-# - Enter the root password when prompted.
-# 2. Create a new file named start.sh and copy the contents of this script into it.
-# COMMAND: nano start.sh
-# Copy & Paste this script content and save the file using (Ctrl + O, then Enter, and Ctrl + X to exit).
-# 3. Make the script executable by running the following command:
-# COMMAND: sudo chmod +x start.sh
-# 4. Run the script with root privileges:
-# COMMAND: sudo ./start.sh
-# Note: The script will prompt you for the new username and password for the sudo user, as well as your SSH public key for key-based authentication. Follow the prompts to complete the setup.
+# 2. Run this one-liner to download and start the setup:
+# COMMAND: apt update && apt install -y curl && curl -fsSL https://github.com/LanceTreyark/Linux-Initialization-Script---March-2026/archive/refs/heads/main.tar.gz | tar -xz -C /tmp && bash /tmp/Linux-Initialization-Script---March-2026-main/start.sh
+# Note: The script will prompt you for the new username and password for the sudo user,
+# as well as your SSH public key for key-based authentication.
 #
 # Beginning script execution
 #
@@ -56,20 +51,35 @@ echo "User $username has been created and added to the sudo group."
 # Set up UFW firewall rules (will enable at the end of the script)
 ufw allow OpenSSH
 echo "UFW rule added: OpenSSH allowed."
-# Check if there are any existing ssh keys in the default location and prompt the user to use one if available
-if [ -f ~/.ssh/id_rsa.pub ]; then
-  read -p "An SSH public key was found at ~/.ssh/id_rsa.pub. Do you want to use this key for SSH access? (y/n) " use_existing_key
-fi  
-# if the keys exist and the user wants to use them, read the key from the file and store it in a variable
-if [ "$use_existing_key" == "y" ]; then
-  ssh_key=$(cat ~/.ssh/id_rsa.pub)
-else
-# If keys already exist copy the existing keys to the new sudo user's .ssh directory so that they can be used for SSH access
-  read -p "No existing SSH public key will be used. Please enter your SSH public key (e.g., from ~/.ssh/id_rsa.pub): " ssh_key
+# Check for existing SSH keys — authorized_keys first (user SSH'd in with a key),
+# then any .pub key files (ed25519, rsa, ecdsa, etc.)
+existing_key_file=""
+if [ -f ~/.ssh/authorized_keys ] && [ -s ~/.ssh/authorized_keys ]; then
+  existing_key_file="$HOME/.ssh/authorized_keys"
+  echo ""
+  echo "Existing SSH key(s) found in root's authorized_keys:"
+  echo "─────────────────────────────────────────"
+  cat "$existing_key_file"
+  echo "─────────────────────────────────────────"
+  read -p "Copy these key(s) to the new user $username? (y/n) " use_existing_key
+elif ls ~/.ssh/*.pub 1>/dev/null 2>&1; then
+  existing_key_file=$(ls ~/.ssh/*.pub | head -n 1)
+  echo ""
+  echo "SSH public key found at $existing_key_file:"
+  echo "─────────────────────────────────────────"
+  cat "$existing_key_file"
+  echo "─────────────────────────────────────────"
+  read -p "Use this key for user $username? (y/n) " use_existing_key
 fi
 # Set up SSH key-based authentication
 mkdir -p /home/$username/.ssh
-echo $ssh_key > /home/$username/.ssh/authorized_keys
+if [ "$use_existing_key" == "y" ] && [ -n "$existing_key_file" ]; then
+  cp "$existing_key_file" /home/$username/.ssh/authorized_keys
+  echo "Existing SSH key(s) copied to user $username."
+else
+  read -p "Enter your SSH public key: " ssh_key
+  echo "$ssh_key" > /home/$username/.ssh/authorized_keys
+fi
 chown -R $username:$username /home/$username/.ssh
 chmod 700 /home/$username/.ssh
 chmod 600 /home/$username/.ssh/authorized_keys
@@ -110,6 +120,9 @@ if [ -d "$SCRIPT_DIR/PlatformTools" ]; then
   chown -R $username:$username /home/$username/PlatformTools
   chmod +x /home/$username/PlatformTools/platformInstaller.sh
   echo "PlatformTools has been copied to /home/$username/PlatformTools"
+else
+  echo "WARNING: PlatformTools directory not found at $SCRIPT_DIR/PlatformTools"
+  echo "The 'platforms' command will not work. Re-run using the one-liner from the README."
 fi
 # Copy over SSH keys to the root user's .ssh directory so that root can also use key-based authentication
 mkdir -p /root/.ssh
@@ -123,14 +136,23 @@ ufw allow 443/tcp
 echo "Standard web ports 80 and 443 have been allowed through the UFW firewall."
 ufw --force enable
 echo "UFW firewall has been enabled with all rules."
+# Detect server IP for the completion message
+server_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+if [ -z "$server_ip" ]; then
+  server_ip="your_vps_ip"
+fi
 # Return instructions for the user to log in with the new sudo user
 echo ""
-echo "===== Setup Complete! ====="
-echo "You can now log in to your VPS using the new sudo user $username with SSH key-based authentication."
-echo "  ssh $username@your_vps_ip"
+echo "============================================"
+echo "  Setup Complete!"
+echo "============================================"
+echo ""
+echo "Log in with your new sudo user:"
+echo "  ssh $username@$server_ip"
 echo ""
 echo "Available alias commands:"
 echo "  update    - runs apt update && apt upgrade"
 echo "  bb        - launches btop system monitor"
 echo "  monitor   - launches btop system monitor"
 echo "  platforms - opens the interactive package installer"
+echo ""

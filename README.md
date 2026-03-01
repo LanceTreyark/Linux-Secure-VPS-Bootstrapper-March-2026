@@ -21,41 +21,21 @@ Base server configuration script for **Debian 13** that automates initial VPS se
 ssh root@your_vps_ip
 ```
 
-### 2. Install curl and git
+### 2. Run the installer
+
+One command — downloads the repo, extracts it, and runs the setup script:
 
 ```bash
-apt install -y curl git
+apt update && apt install -y curl && curl -fsSL https://github.com/LanceTreyark/Linux-Initialization-Script---March-2026/archive/refs/heads/main.tar.gz | tar -xz -C /tmp && bash /tmp/Linux-Initialization-Script---March-2026-main/start.sh
 ```
 
-### 3. Clone the repository
-
-```bash
-git clone https://github.com/YOUR_USERNAME/Linux_Initialization_Script_March_2026.git
-cd Linux_Initialization_Script_March_2026
-```
-
-Or create the script manually:
-
-```bash
-nano start.sh
-```
-
-Paste the script contents, then save with `Ctrl + O`, `Enter`, `Ctrl + X`.
-
-### 4. Make it executable and run
-
-```bash
-chmod +x start.sh
-sudo ./start.sh
-```
-
-### 5. Follow the prompts
+### 3. Follow the prompts
 
 The script will ask you to:
 
 1. Enter a username for the new sudo user
 2. Set a password for the new user
-3. Provide your SSH public key (or use an existing one on the server)
+3. Provide your SSH public key (or reuse the key(s) already on the server)
 4. Optionally add additional SSH keys
 
 ## After Installation
