@@ -1,0 +1,23 @@
+{
+  "name": "openclaw-portal",
+  "version": "1.0.0",
+  "description": "OpenClaw authenticated portal with Passport.js and PostgreSQL sessions",
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "setup-db": "node db/setup.mjs"
+  },
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "connect-pg-simple": "^9.0.1",
+    "dotenv": "^16.4.5",
+    "ejs": "^3.1.10",
+    "express": "^4.21.0",
+    "express-session": "^1.18.0",
+    "http-proxy-middleware": "^3.0.0",
+    "passport": "^0.7.0",
+    "passport-local": "^1.0.0",
+    "pg": "^8.13.0"
+  }
+}

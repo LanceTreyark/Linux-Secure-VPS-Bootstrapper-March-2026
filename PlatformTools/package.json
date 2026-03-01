@@ -1,0 +1,7 @@
+{
+  "name": "platform-installer",
+  "version": "1.0.0",
+  "description": "Interactive platform package installer for Linux VPS",
+  "main": "installer.mjs",
+  "type": "module"
+}

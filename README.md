@@ -1,17 +1,19 @@
 # Linux VPS Initialization Script
 
-Base server configuration script for **Debian 13** that automates initial VPS setup.
+Base server configuration script for **Debian 13** that automates initial VPS setup, installs Node.js, and deploys an interactive package manager.
 
 ## What This Script Does
 
-- Creates a sudo user
-- Configures UFW firewall (SSH, HTTP, HTTPS)
-- Sets up SSH key-based authentication
-- Disables password login
-- Installs btop system monitor
-- Adds alias commands for common tasks
+1. **Creates a sudo user** — prompts for username and password
+2. **Installs core packages** — sudo, ufw, btop, curl, ca-certificates, gnupg
+3. **Installs Node.js 22 LTS** — via NodeSource repository
+4. **Configures UFW firewall** — opens SSH (22), HTTP (80), HTTPS (443)
+5. **Sets up SSH key-based authentication** — supports multiple keys
+6. **Disables password login** — hardens SSH access
+7. **Deploys the Platform Installer** — copies to user's home directory
+8. **Configures alias commands** — shortcuts for both the sudo user and root
 
-## Installation
+## Quick Start
 
 ### 1. SSH into your VPS as root
 
@@ -19,19 +21,20 @@ Base server configuration script for **Debian 13** that automates initial VPS se
 ssh root@your_vps_ip
 ```
 
-### 2. Install curl (if not already installed)
+### 2. Install curl and git
 
 ```bash
-apt install -y curl
+apt install -y curl git
 ```
 
-### 3. Download the script
+### 3. Clone the repository
 
 ```bash
-curl -O https://raw.githubusercontent.com/YOUR_USERNAME/Linux_Initialization_Script_March_2026/main/start.sh
+git clone https://github.com/YOUR_USERNAME/Linux_Initialization_Script_March_2026.git
+cd Linux_Initialization_Script_March_2026
 ```
 
-Or create it manually:
+Or create the script manually:
 
 ```bash
 nano start.sh
@@ -39,25 +42,20 @@ nano start.sh
 
 Paste the script contents, then save with `Ctrl + O`, `Enter`, `Ctrl + X`.
 
-### 4. Make the script executable
+### 4. Make it executable and run
 
 ```bash
 chmod +x start.sh
-```
-
-### 5. Run the script
-
-```bash
 sudo ./start.sh
 ```
 
-### 6. Follow the prompts
+### 5. Follow the prompts
 
 The script will ask you to:
 
 1. Enter a username for the new sudo user
 2. Set a password for the new user
-3. Provide your SSH public key (or use an existing one)
+3. Provide your SSH public key (or use an existing one on the server)
 4. Optionally add additional SSH keys
 
 ## After Installation
@@ -70,11 +68,25 @@ ssh your_username@your_vps_ip
 
 ### Available Alias Commands
 
-| Command   | Action                              |
-|-----------|-------------------------------------|
-| `update`  | `sudo apt update && sudo apt upgrade -y` |
-| `bb`      | Launches `btop` system monitor      |
-| `monitor` | Launches `btop` system monitor      |
+| Command     | Action                                        |
+|-------------|-----------------------------------------------|
+| `update`    | `sudo apt update && sudo apt upgrade -y`      |
+| `bb`        | Launches `btop` system monitor                |
+| `monitor`   | Launches `btop` system monitor                |
+| `platforms` | Opens the interactive Platform Installer menu |
+
+### Installed by Default
+
+| Package       | Version        | Purpose                    |
+|---------------|----------------|----------------------------|
+| Node.js       | 22.x LTS       | JavaScript runtime + npm   |
+| btop          | latest         | System resource monitor    |
+| curl          | latest         | HTTP client                |
+| UFW           | latest         | Firewall manager           |
+
+## Platform Installer
+
+After setup, type `platforms` to launch the interactive package manager. See [PlatformTools/PLATFORM_INSTALLER.md](PlatformTools/PLATFORM_INSTALLER.md) for full documentation.
 
 ## Firewall Ports
 
@@ -85,3 +97,37 @@ The following ports are opened by default:
 | 22/tcp  | SSH     |
 | 80/tcp  | HTTP    |
 | 443/tcp | HTTPS   |
+
+Additional ports are opened automatically when installing packages that require them (e.g., OpenClaw opens 18789/tcp).
+
+## Project Structure
+
+```
+├── start.sh                      # Main initialization script
+├── README.md                     # This file
+├── Q_Com.sh                      # Quick git commit helper
+├── Developers/
+│   ├── NotesForContributors.md   # Architecture overview & contributing guide
+│   └── LancesGuideForOpenclawAgents.md  # AI agent deployment conventions
+└── PlatformTools/
+    ├── platformInstaller.sh      # Shell wrapper (launches Node installer)
+    ├── installer.mjs             # Interactive Node.js package manager
+    ├── package.json              # Node module config
+    ├── PLATFORM_INSTALLER.md     # Platform Installer documentation
+    └── openclaw-portal/          # Authenticated OpenClaw portal app
+```
+
+## Developer Guides
+
+Detailed documentation for contributors and AI agents lives in the `Developers/` directory:
+
+| Guide | Purpose |
+|-------|---------|
+| [NotesForContributors.md](Developers/NotesForContributors.md) | Full architecture overview, component breakdowns, data flow diagrams, code style rules, and a pull request checklist — start here if you want to understand the codebase or submit a PR |
+| [LancesGuideForOpenclawAgents.md](Developers/LancesGuideForOpenclawAgents.md) | Deployment conventions for AI agents building websites on this server — covers the directory structure, Nginx reverse proxy setup, port allocation, PostgreSQL usage, SSL, and a step-by-step deployment checklist |
+
+Additional technical docs:
+
+| Guide | Purpose |
+|-------|---------|
+| [PLATFORM_INSTALLER.md](PlatformTools/PLATFORM_INSTALLER.md) | User-facing documentation for the interactive package manager (stacks, categories, special flows) |

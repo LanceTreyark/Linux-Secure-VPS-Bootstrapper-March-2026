@@ -39,7 +39,15 @@ fi
 # Update package lists and upgrade existing packages
 apt update && apt upgrade -y
 # Install necessary packages
-apt install -y sudo ufw btop curl
+apt install -y sudo ufw btop curl ca-certificates gnupg
+# Install Node.js via NodeSource (LTS)
+echo "Installing Node.js LTS..."
+mkdir -p /etc/apt/keyrings
+curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list
+apt update
+apt install -y nodejs
+echo "Node.js $(node -v) installed."
 # Create a new sudo user
 read -p "Enter the new username for the sudo user: " username
 adduser $username
@@ -87,12 +95,22 @@ echo "Password authentication for SSH has been disabled."
 echo "alias update='sudo apt update && sudo apt upgrade -y'" >> /home/$username/.bashrc
 echo "alias bb='btop'" >> /home/$username/.bashrc
 echo "alias monitor='btop'" >> /home/$username/.bashrc
+echo "alias platforms='sudo bash /home/$username/PlatformTools/platformInstaller.sh'" >> /home/$username/.bashrc
 echo "Alias commands have been added to the .bashrc file for user $username."
 # Append alias commands to root's .bashrc so they are available for the root user as well
 echo "alias update='sudo apt update && sudo apt upgrade -y'" >> /root/.bashrc
 echo "alias bb='btop'" >> /root/.bashrc
 echo "alias monitor='btop'" >> /root/.bashrc
+echo "alias platforms='sudo bash /home/$username/PlatformTools/platformInstaller.sh'" >> /root/.bashrc
 echo "Alias commands have been added to root's .bashrc."
+# Copy PlatformTools to the sudo user's home directory
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -d "$SCRIPT_DIR/PlatformTools" ]; then
+  cp -r "$SCRIPT_DIR/PlatformTools" /home/$username/PlatformTools
+  chown -R $username:$username /home/$username/PlatformTools
+  chmod +x /home/$username/PlatformTools/platformInstaller.sh
+  echo "PlatformTools has been copied to /home/$username/PlatformTools"
+fi
 # Copy over SSH keys to the root user's .ssh directory so that root can also use key-based authentication
 mkdir -p /root/.ssh
 cp /home/$username/.ssh/authorized_keys /root/.ssh/authorized_keys
@@ -112,6 +130,7 @@ echo "You can now log in to your VPS using the new sudo user $username with SSH 
 echo "  ssh $username@your_vps_ip"
 echo ""
 echo "Available alias commands:"
-echo "  update  - runs apt update && apt upgrade"
-echo "  bb      - launches btop system monitor"
-echo "  monitor - launches btop system monitor"
+echo "  update    - runs apt update && apt upgrade"
+echo "  bb        - launches btop system monitor"
+echo "  monitor   - launches btop system monitor"
+echo "  platforms - opens the interactive package installer"
