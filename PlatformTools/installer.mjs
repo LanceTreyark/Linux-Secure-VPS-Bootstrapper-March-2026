@@ -10,6 +10,10 @@ import * as readline from 'readline';
 import { fileURLToPath } from 'url';
 import path from 'path';
 
+// Prevent child processes from stealing stdin (which kills readline).
+// Show stdout + stderr but feed /dev/null into stdin.
+const NO_STDIN = { stdio: ['ignore', 'inherit', 'inherit'] };
+
 // ── Color helpers ───────────────────────────────
 const c = {
   reset:   '\x1b[0m',
@@ -157,7 +161,7 @@ function isInstalled(key) {
 function runApt(action, aptName) {
   try {
     console.log(`\n${c.cyan}${c.bold}${action === 'install' ? icon.package : icon.trash} ${action === 'install' ? 'Installing' : 'Removing'} ${aptName}...${c.reset}\n`);
-    execSync(`apt ${action} -y ${aptName}`, { stdio: 'inherit' });
+    execSync(`apt ${action} -y ${aptName}`, NO_STDIN);
     return true;
   } catch {
     return false;
@@ -169,7 +173,7 @@ function runCustomInstall(key) {
   if (!custom) return false;
   try {
     console.log(`\n${c.cyan}${c.bold}${icon.package} Installing ${packages[key].name} (custom)...${c.reset}\n`);
-    execSync(custom.install, { stdio: 'inherit' });
+    execSync(custom.install, NO_STDIN);
     return true;
   } catch {
     return false;
@@ -179,7 +183,7 @@ function runCustomInstall(key) {
 function openPorts(ports) {
   for (const port of ports) {
     try {
-      execSync(`ufw allow ${port}`, { stdio: 'inherit' });
+      execSync(`ufw allow ${port}`, NO_STDIN);
       console.log(`  ${icon.check} ${c.green}Opened port ${port}${c.reset}`);
     } catch {
       console.log(`  ${icon.x} ${c.red}Failed to open port ${port}${c.reset}`);
@@ -383,9 +387,9 @@ async function setupOpenClawDomain(rl) {
     console.log(`\n  ${c.cyan}Running Certbot to obtain SSL certificate...${c.reset}\n`);
     try {
       if (webserver === 'nginx') {
-        execSync(`certbot --nginx -d ${domain} -d www.${domain} --non-interactive --agree-tos --redirect --register-unsafely-without-email`, { stdio: 'inherit' });
+        execSync(`certbot --nginx -d ${domain} -d www.${domain} --non-interactive --agree-tos --redirect --register-unsafely-without-email`, NO_STDIN);
       } else if (webserver === 'apache2') {
-        execSync(`certbot --apache -d ${domain} -d www.${domain} --non-interactive --agree-tos --redirect --register-unsafely-without-email`, { stdio: 'inherit' });
+        execSync(`certbot --apache -d ${domain} -d www.${domain} --non-interactive --agree-tos --redirect --register-unsafely-without-email`, NO_STDIN);
       } else {
         console.log(`  ${c.dim}Caddy handles SSL automatically. Skipping certbot.${c.reset}`);
       }
@@ -446,31 +450,11 @@ async function configureOpenClawDomain(rl) {
   await ask(rl, `\n  ${c.dim}Press Enter to continue...${c.reset}`);
 }
 
-// ── OpenClaw post-install setup ─────────────────
+// ── OpenClaw post-install setup (idempotent — safe to re-run) ──
 async function setupOpenClaw(rl) {
   console.log();
   console.log(`${c.bgMagenta}${c.white}${c.bold}                                                ${c.reset}`);
   console.log(`${c.bgMagenta}${c.white}${c.bold}   🤖 OpenClaw Gateway Setup                    ${c.reset}`);
-  console.log(`${c.bgMagenta}${c.white}${c.bold}                                                ${c.reset}`);
-  console.log();
-
-  // ── Ask for domain ────────────────────────────
-  const domain = await setupOpenClawDomain(rl);
-
-  // ── Install OpenClaw binary ────────────────────
-  console.log();
-  console.log(`  ${c.cyan}${c.bold}Installing OpenClaw gateway...${c.reset}`);
-  try {
-    execSync('curl -fsSL https://openclaw.ai/install.sh | bash', { stdio: 'inherit' });
-    console.log(`  ${icon.check} ${c.green}OpenClaw gateway installed${c.reset}`);
-  } catch {
-    console.log(`  ${icon.x} ${c.red}OpenClaw gateway installation failed. You can retry later.${c.reset}`);
-  }
-
-  // ── Deploy OpenClaw Portal ────────────────────
-  console.log();
-  console.log(`${c.bgMagenta}${c.white}${c.bold}                                                ${c.reset}`);
-  console.log(`${c.bgMagenta}${c.white}${c.bold}   🔐 OpenClaw Portal Setup                     ${c.reset}`);
   console.log(`${c.bgMagenta}${c.white}${c.bold}                                                ${c.reset}`);
   console.log();
 
@@ -481,82 +465,155 @@ async function setupOpenClaw(rl) {
   } catch { realUser = 'root'; }
   const homeDir = realUser === 'root' ? '/root' : `/home/${realUser}`;
 
-  // Install PostgreSQL if not present
-  if (!isInstalled('postgresql')) {
-    console.log(`  ${c.cyan}PostgreSQL is required for the portal. Installing...${c.reset}`);
-    installPackage('postgresql');
-    try {
-      execSync('systemctl enable postgresql && systemctl start postgresql', { stdio: 'pipe' });
-    } catch { /* continue */ }
-  }
-
-  // Copy portal files to /opt/openclaw-portal
   const installerDir = path.dirname(fileURLToPath(import.meta.url));
   const portalSrc = path.join(installerDir, 'openclaw-portal');
   const portalDest = '/opt/openclaw-portal';
 
-  console.log(`  ${c.cyan}Deploying portal to ${portalDest}...${c.reset}`);
-  try {
-    execSync(`rm -rf ${portalDest} && cp -r ${portalSrc} ${portalDest}`, { stdio: 'pipe' });
-    console.log(`  ${icon.check} ${c.green}Portal files deployed${c.reset}`);
-  } catch (err) {
-    console.log(`  ${icon.x} ${c.red}Failed to copy portal files: ${err.message}${c.reset}`);
-    return;
+  // ── Helper: check if a step is already done ───
+  function fileExists(p) { try { execSync(`test -f ${p}`, { stdio: 'pipe' }); return true; } catch { return false; } }
+  function dirExists(p) { try { execSync(`test -d ${p}`, { stdio: 'pipe' }); return true; } catch { return false; } }
+
+  const portalDeployed = dirExists(portalDest) && fileExists(`${portalDest}/server.mjs`);
+  const depsInstalled = dirExists(`${portalDest}/node_modules`);
+  const envExists = fileExists(`${portalDest}/.env`);
+  const portalCtlExists = fileExists('/usr/local/bin/portal-ctl');
+  const openclawInstalled = isInstalled('openclaw');
+
+  // Show recovery status if re-running
+  if (portalDeployed || openclawInstalled) {
+    console.log(`  ${c.yellow}${c.bold}Recovery mode — checking what still needs setup:${c.reset}`);
+    console.log(`  ${portalDeployed ? icon.check + c.green : icon.x + c.red}Portal files${c.reset}`);
+    console.log(`  ${depsInstalled ? icon.check + c.green : icon.x + c.red}npm dependencies${c.reset}`);
+    console.log(`  ${envExists ? icon.check + c.green : icon.x + c.red}.env config${c.reset}`);
+    console.log(`  ${portalCtlExists ? icon.check + c.green : icon.x + c.red}portal-ctl script${c.reset}`);
+    console.log(`  ${openclawInstalled ? icon.check + c.green : icon.x + c.red}OpenClaw binary${c.reset}`);
+    console.log();
   }
 
-  // Install dependencies
-  console.log(`  ${c.cyan}Installing portal dependencies...${c.reset}`);
+  // ── 1. Domain setup ──────────────────────────
+  let domain = null;
+  let existingDomain = null;
   try {
-    execSync(`cd ${portalDest} && npm install --omit=dev`, { stdio: 'inherit' });
-    console.log(`  ${icon.check} ${c.green}Dependencies installed${c.reset}`);
-  } catch {
-    console.log(`  ${icon.x} ${c.red}npm install failed. Run manually: cd ${portalDest} && npm install${c.reset}`);
-  }
+    const sites = execSync('ls /etc/nginx/sites-available/ 2>/dev/null', { encoding: 'utf-8' }).trim();
+    const candidates = sites.split('\n').filter(s => s !== 'default' && s.length > 0);
+    if (candidates.length > 0) existingDomain = candidates[0];
+  } catch { /* no nginx or no sites */ }
 
-  // Generate .env
-  let sessionSecret = 'change-me';
-  try { sessionSecret = execSync('openssl rand -hex 32', { encoding: 'utf-8' }).trim(); } catch { /* use default */ }
-  const envLines = [
-    'PORTAL_PORT=3000',
-    'OPENCLAW_PORT=18789',
-    `SESSION_SECRET=${sessionSecret}`,
-    'NODE_ENV=production',
-    'DATABASE_URL=postgresql://openclaw_portal:openclaw_portal@localhost:5432/openclaw_portal',
-  ];
-  try {
-    execSync(`printf '%s\\n' ${envLines.map(l => `'${l}'`).join(' ')} > ${portalDest}/.env`, { stdio: 'pipe' });
-    execSync(`chmod 600 ${portalDest}/.env`, { stdio: 'pipe' });
-    console.log(`  ${icon.check} ${c.green}Environment configured (.env)${c.reset}`);
-  } catch { /* non-critical */ }
-
-  // Prompt for admin credentials
-  console.log();
-  console.log(`  ${c.yellow}${c.bold}Create your admin account for the OpenClaw Portal:${c.reset}`);
-  const adminUser = await ask(rl, `  ${c.cyan}Admin username: ${c.reset}`);
-  const adminPass = await ask(rl, `  ${c.cyan}Admin password: ${c.reset}`);
-
-  // Run database setup
-  if (adminUser && adminPass) {
-    console.log(`\n  ${c.cyan}Setting up database & admin account...${c.reset}`);
-    try {
-      execSync(`cd ${portalDest} && ADMIN_USER="${adminUser}" ADMIN_PASS="${adminPass}" node db/setup.mjs`, { stdio: 'inherit' });
-      console.log(`  ${icon.check} ${c.green}Database configured & admin account created${c.reset}`);
-    } catch {
-      console.log(`  ${icon.x} ${c.red}Database setup failed. Run manually: cd ${portalDest} && node db/setup.mjs${c.reset}`);
+  if (existingDomain) {
+    console.log(`  ${icon.check} ${c.green}Domain already configured: ${c.bold}${existingDomain}${c.reset}`);
+    const reconfigure = await ask(rl, `  ${c.cyan}Reconfigure domain? (y/n): ${c.reset}`);
+    if (reconfigure.toLowerCase() === 'y') {
+      domain = await setupOpenClawDomain(rl);
+    } else {
+      domain = existingDomain;
     }
   } else {
-    console.log(`  ${c.yellow}Skipped — run manually later: cd ${portalDest} && node db/setup.mjs${c.reset}`);
+    domain = await setupOpenClawDomain(rl);
   }
 
-  // Install portal-ctl management script
+  // ── 2. PostgreSQL ─────────────────────────────
+  if (!isInstalled('postgresql')) {
+    console.log(`\n  ${c.cyan}PostgreSQL is required for the portal. Installing...${c.reset}`);
+    installPackage('postgresql');
+  }
   try {
-    execSync(`cp ${portalDest}/portal-ctl.sh /usr/local/bin/portal-ctl && chmod +x /usr/local/bin/portal-ctl`, { stdio: 'pipe' });
-    console.log(`  ${icon.check} ${c.green}Management script installed: /usr/local/bin/portal-ctl${c.reset}`);
-  } catch {
-    console.log(`  ${icon.x} ${c.red}Failed to install portal-ctl to /usr/local/bin/${c.reset}`);
+    execSync('systemctl enable postgresql && systemctl start postgresql', { stdio: 'pipe' });
+    console.log(`  ${icon.check} ${c.green}PostgreSQL running${c.reset}`);
+  } catch { /* continue */ }
+
+  // ── 3. Deploy portal files ────────────────────
+  if (!portalDeployed) {
+    console.log();
+    console.log(`${c.bgMagenta}${c.white}${c.bold}                                                ${c.reset}`);
+    console.log(`${c.bgMagenta}${c.white}${c.bold}   🔐 OpenClaw Portal Setup                     ${c.reset}`);
+    console.log(`${c.bgMagenta}${c.white}${c.bold}                                                ${c.reset}`);
+    console.log();
+    console.log(`  ${c.cyan}Deploying portal to ${portalDest}...${c.reset}`);
+    try {
+      execSync(`rm -rf ${portalDest} && cp -r ${portalSrc} ${portalDest}`, { stdio: 'pipe' });
+      console.log(`  ${icon.check} ${c.green}Portal files deployed${c.reset}`);
+    } catch (err) {
+      console.log(`  ${icon.x} ${c.red}Failed to copy portal files: ${err.message}${c.reset}`);
+      return;
+    }
+  } else {
+    console.log(`  ${icon.check} ${c.green}Portal files already deployed${c.reset}`);
   }
 
-  // Set up hourly cron health-check
+  // ── 4. npm dependencies ───────────────────────
+  if (!depsInstalled) {
+    console.log(`  ${c.cyan}Installing portal dependencies...${c.reset}`);
+    try {
+      execSync(`cd ${portalDest} && npm install --omit=dev`, NO_STDIN);
+      console.log(`  ${icon.check} ${c.green}Dependencies installed${c.reset}`);
+    } catch {
+      console.log(`  ${icon.x} ${c.red}npm install failed. Run manually: cd ${portalDest} && npm install${c.reset}`);
+    }
+  } else {
+    console.log(`  ${icon.check} ${c.green}Dependencies already installed${c.reset}`);
+  }
+
+  // ── 5. .env config ───────────────────────────
+  if (!envExists) {
+    let sessionSecret = 'change-me';
+    try { sessionSecret = execSync('openssl rand -hex 32', { encoding: 'utf-8' }).trim(); } catch { /* use default */ }
+    const envLines = [
+      'PORTAL_PORT=3000',
+      'OPENCLAW_PORT=18789',
+      `SESSION_SECRET=${sessionSecret}`,
+      'NODE_ENV=production',
+      'DATABASE_URL=postgresql://openclaw_portal:openclaw_portal@localhost:5432/openclaw_portal',
+    ];
+    try {
+      execSync(`printf '%s\\n' ${envLines.map(l => `'${l}'`).join(' ')} > ${portalDest}/.env`, { stdio: 'pipe' });
+      execSync(`chmod 600 ${portalDest}/.env`, { stdio: 'pipe' });
+      console.log(`  ${icon.check} ${c.green}Environment configured (.env)${c.reset}`);
+    } catch { /* non-critical */ }
+  } else {
+    console.log(`  ${icon.check} ${c.green}.env already configured${c.reset}`);
+  }
+
+  // ── 6. Database & admin account ───────────────
+  let dbReady = false;
+  try {
+    const dbCheck = execSync(`sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='openclaw_portal'"`, { encoding: 'utf-8' }).trim();
+    dbReady = dbCheck === '1';
+  } catch { /* not ready */ }
+
+  if (!dbReady) {
+    console.log();
+    console.log(`  ${c.yellow}${c.bold}Create your admin account for the OpenClaw Portal:${c.reset}`);
+    const adminUser = await ask(rl, `  ${c.cyan}Admin username: ${c.reset}`);
+    const adminPass = await ask(rl, `  ${c.cyan}Admin password: ${c.reset}`);
+
+    if (adminUser && adminPass) {
+      console.log(`\n  ${c.cyan}Setting up database & admin account...${c.reset}`);
+      try {
+        execSync(`cd ${portalDest} && ADMIN_USER="${adminUser}" ADMIN_PASS="${adminPass}" node db/setup.mjs`, NO_STDIN);
+        console.log(`  ${icon.check} ${c.green}Database configured & admin account created${c.reset}`);
+      } catch {
+        console.log(`  ${icon.x} ${c.red}Database setup failed. Run manually: cd ${portalDest} && node db/setup.mjs${c.reset}`);
+      }
+    } else {
+      console.log(`  ${c.yellow}Skipped — run manually later: cd ${portalDest} && node db/setup.mjs${c.reset}`);
+    }
+  } else {
+    console.log(`  ${icon.check} ${c.green}Database already configured${c.reset}`);
+  }
+
+  // ── 7. portal-ctl management script ───────────
+  if (!portalCtlExists) {
+    try {
+      execSync(`cp ${portalDest}/portal-ctl.sh /usr/local/bin/portal-ctl && chmod +x /usr/local/bin/portal-ctl`, { stdio: 'pipe' });
+      console.log(`  ${icon.check} ${c.green}Management script installed: /usr/local/bin/portal-ctl${c.reset}`);
+    } catch {
+      console.log(`  ${icon.x} ${c.red}Failed to install portal-ctl to /usr/local/bin/${c.reset}`);
+    }
+  } else {
+    console.log(`  ${icon.check} ${c.green}portal-ctl already installed${c.reset}`);
+  }
+
+  // ── 8. Cron health-check ──────────────────────
   try {
     let existingCron = '';
     try { existingCron = execSync('crontab -l 2>/dev/null', { encoding: 'utf-8' }); } catch { /* empty crontab */ }
@@ -572,7 +629,7 @@ async function setupOpenClaw(rl) {
     console.log(`  ${c.white}  (crontab -l; echo "0 * * * * /usr/local/bin/portal-ctl health") | crontab -${c.reset}`);
   }
 
-  // Add aliases to user's and root's bashrc
+  // ── 9. Aliases ────────────────────────────────
   const aliasBlock = [
     '',
     '# OpenClaw Portal aliases',
@@ -591,45 +648,22 @@ async function setupOpenClaw(rl) {
   }
   console.log(`  ${icon.check} ${c.green}Aliases added: portal-start, portal-stop, portal-status${c.reset}`);
 
-  // ── Start services ────────────────────────────
-  console.log();
-  const startNow = await ask(rl, `  ${c.cyan}Start OpenClaw gateway & portal now? (y/n): ${c.reset}`);
-  if (startNow.toLowerCase() === 'y') {
-    // Start OpenClaw gateway
-    try {
-      console.log(`\n  ${c.cyan}Starting OpenClaw gateway on port 18789 (internal)...${c.reset}`);
-      execSync('nohup openclaw gateway --port 18789 > /var/log/openclaw.log 2>&1 &', { stdio: 'pipe' });
-      console.log(`  ${icon.check} ${c.green}OpenClaw gateway started on port 18789${c.reset}`);
-    } catch {
-      console.log(`  ${icon.x} ${c.red}Failed to start OpenClaw gateway.${c.reset}`);
-      console.log(`  ${c.white}  Start manually: openclaw gateway --port 18789${c.reset}`);
-    }
-
-    // Start portal
-    try {
-      execSync('/usr/local/bin/portal-ctl start', { stdio: 'pipe' });
-      console.log(`  ${icon.check} ${c.green}Portal started on port 3000${c.reset}`);
-    } catch {
-      console.log(`  ${icon.x} ${c.red}Failed to start portal. Try: portal-start${c.reset}`);
-    }
-
-    if (domain) {
-      console.log(`\n  ${c.dim}Traffic: User → ${domain} (443) → Portal (3000) → OpenClaw (18789)${c.reset}`);
-      console.log(`\n  ${icon.rocket} ${c.green}${c.bold}OpenClaw is live at: https://${domain}${c.reset}`);
-    } else {
-      openPorts(['3000/tcp']);
-      console.log(`\n  ${c.dim}Traffic: User → :3000 (Portal + Auth) → OpenClaw (18789)${c.reset}`);
-      console.log(`\n  ${icon.rocket} ${c.green}${c.bold}OpenClaw Portal: http://your_server_ip:3000${c.reset}`);
-    }
-  } else {
-    if (!domain) {
-      openPorts(['3000/tcp']);
-    }
-    console.log(`\n  ${c.dim}Start later with: portal-start${c.reset}`);
-    console.log(`  ${c.dim}Gateway: openclaw gateway --port 18789${c.reset}`);
+  // ── 10. Start portal ──────────────────────────
+  try {
+    execSync('/usr/local/bin/portal-ctl start', { stdio: 'pipe' });
+    console.log(`  ${icon.check} ${c.green}Portal started on port 3000${c.reset}`);
+  } catch {
+    console.log(`  ${icon.x} ${c.red}Failed to start portal. Try: portal-start${c.reset}`);
   }
 
-  // ── Summary ───────────────────────────────────
+  if (domain) {
+    console.log(`\n  ${c.dim}Traffic: User → ${domain} (443) → Portal (3000) → OpenClaw (18789)${c.reset}`);
+  } else {
+    openPorts(['3000/tcp']);
+    console.log(`\n  ${c.dim}Traffic: User → :3000 (Portal + Auth) → OpenClaw (18789)${c.reset}`);
+  }
+
+  // Summary
   console.log();
   console.log(`${c.bgMagenta}${c.white}${c.bold}  ╔══════════════════════════════════════════════╗  ${c.reset}`);
   console.log(`${c.bgMagenta}${c.white}${c.bold}  ║  Portal Management Commands                  ║  ${c.reset}`);
@@ -642,6 +676,49 @@ async function setupOpenClaw(rl) {
   console.log(`  ${c.dim}A cron job runs every hour to check if the portal is alive.${c.reset}`);
   console.log(`  ${c.dim}Using portal-stop disables auto-restart until portal-start is used.${c.reset}`);
   console.log(`  ${c.dim}Logs: /var/log/openclaw-portal.log${c.reset}`);
+
+  // ── 11. Install OpenClaw binary (last — may take a while) ──
+  if (!openclawInstalled) {
+    console.log();
+    console.log(`${c.bgMagenta}${c.white}${c.bold}                                                ${c.reset}`);
+    console.log(`${c.bgMagenta}${c.white}${c.bold}   📦 Installing OpenClaw Gateway                ${c.reset}`);
+    console.log(`${c.bgMagenta}${c.white}${c.bold}                                                ${c.reset}`);
+    console.log();
+
+    // Ensure swap exists — OpenClaw npm install needs ~1GB and gets OOM-killed on small VPS
+    let hasSwap = false;
+    try { hasSwap = execSync('swapon --show 2>/dev/null', { encoding: 'utf-8' }).trim().length > 0; } catch { /* no swap */ }
+    if (!hasSwap) {
+      console.log(`  ${c.yellow}No swap detected. Creating 1GB swap to prevent out-of-memory during install...${c.reset}`);
+      try {
+        execSync('fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile', { stdio: 'pipe' });
+        console.log(`  ${icon.check} ${c.green}1GB swap enabled${c.reset}`);
+      } catch {
+        console.log(`  ${c.yellow}Could not create swap — continuing anyway (install may fail on low-RAM servers)${c.reset}`);
+      }
+    }
+
+    console.log(`  ${c.yellow}${c.bold}Installing OpenClaw gateway now — this may take a few minutes.${c.reset}`);
+    console.log(`  ${c.yellow}If the install fails, re-run the OpenClaw option from the menu to retry.${c.reset}`);
+    console.log();
+    try {
+      execSync('curl -fsSL https://openclaw.ai/install.sh | bash', NO_STDIN);
+      console.log(`  ${icon.check} ${c.green}OpenClaw gateway installed${c.reset}`);
+    } catch {
+      console.log(`  ${icon.x} ${c.red}OpenClaw gateway installation failed.${c.reset}`);
+      console.log(`  ${c.yellow}Re-run the OpenClaw option from the Platform Installer to retry.${c.reset}`);
+      console.log(`  ${c.dim}Or manually: curl -fsSL https://openclaw.ai/install.sh | bash${c.reset}`);
+    }
+  } else {
+    console.log(`\n  ${icon.check} ${c.green}OpenClaw gateway already installed${c.reset}`);
+  }
+
+  console.log();
+  if (domain) {
+    console.log(`  ${icon.rocket} ${c.green}${c.bold}OpenClaw is live at: https://${domain}${c.reset}`);
+  } else {
+    console.log(`  ${icon.rocket} ${c.green}${c.bold}OpenClaw Portal: http://your_server_ip:3000${c.reset}`);
+  }
   console.log();
 }
 
@@ -990,7 +1067,7 @@ async function main() {
 
   // Update package lists on launch
   console.log(`\n${c.cyan}${c.bold}  Updating package lists...${c.reset}\n`);
-  try { execSync('apt update', { stdio: 'inherit' }); } catch { /* continue */ }
+  try { execSync('apt update', NO_STDIN); } catch { /* continue */ }
 
   const rl = createPrompt();
 
