@@ -9,6 +9,7 @@ import { execSync } from 'child_process';
 import * as readline from 'readline';
 import { fileURLToPath } from 'url';
 import path from 'path';
+import { readFileSync, appendFileSync, existsSync } from 'fs';
 
 // Prevent child processes from stealing stdin (which kills readline).
 // Show stdout + stderr but feed /dev/null into stdin.
@@ -683,7 +684,7 @@ async function repairOpenClaw(rl) {
     }
   }
 
-  // ── 4. OpenClaw config (allowedOrigins + cleanup) ──
+  // ── 4. OpenClaw config (gateway settings + controlUi) ──
   process.stdout.write(`  ${c.dim}[4/10]${c.reset} OpenClaw config ... `);
   if (fileExists(clawCfg)) {
     try {
@@ -692,6 +693,24 @@ async function repairOpenClaw(rl) {
       let changed = false;
 
       if (!cfg.gateway) cfg.gateway = {};
+
+      // Ensure critical gateway settings (may be lost if `openclaw configure` overwrites config)
+      if (cfg.gateway.mode !== 'local') { cfg.gateway.mode = 'local'; changed = true; }
+      if (cfg.gateway.port !== 18789) { cfg.gateway.port = 18789; changed = true; }
+      if (cfg.gateway.bind !== 'loopback') { cfg.gateway.bind = 'loopback'; changed = true; }
+
+      // Ensure auth token exists — recover from portal .env if missing
+      if (!cfg.gateway.auth?.token) {
+        try {
+          const envContent = execSync(`cat ${portalDest}/.env 2>/dev/null || echo ""`, { encoding: 'utf-8' });
+          const tokenMatch = envContent.match(/^OPENCLAW_TOKEN=(.+)$/m);
+          if (tokenMatch && tokenMatch[1].trim()) {
+            if (!cfg.gateway.auth) cfg.gateway.auth = {};
+            cfg.gateway.auth.token = tokenMatch[1].trim();
+            changed = true;
+          }
+        } catch { /* can't recover token — check 5 will flag it */ }
+      }
 
       // Ensure trustedProxies includes 127.0.0.1 (portal proxies from localhost)
       if (!cfg.gateway.trustedProxies) { cfg.gateway.trustedProxies = ['127.0.0.1']; changed = true; }
@@ -725,7 +744,7 @@ async function repairOpenClaw(rl) {
         try { execSync('systemctl restart openclaw-gateway', { stdio: 'pipe' }); } catch { /* */ }
         issuesFixed++;
       } else {
-        console.log(`${icon.check} ${c.green}allowedOrigins OK${c.reset}`);
+        console.log(`${icon.check} ${c.green}gateway config OK${c.reset}`);
       }
     } catch (err) {
       console.log(`${icon.x} ${c.red}could not parse: ${err.message}${c.reset}`);
@@ -1060,7 +1079,8 @@ async function repairOpenClaw(rl) {
   let aliasesFixed = false;
   for (const rc of bashrcPaths) {
     try {
-      const content = execSync(`cat ${rc} 2>/dev/null || echo ""`, { encoding: 'utf-8' });
+      if (!existsSync(rc)) continue;
+      const content = readFileSync(rc, 'utf-8');
       if (!content.includes('portal-start')) {
         if (!aliasesFixed) { issuesFound++; aliasesFixed = true; }
         const aliasBlock = [
@@ -1070,8 +1090,9 @@ async function repairOpenClaw(rl) {
           "alias portal-status='sudo portal-ctl status'",
           "alias openclaw-stop='sudo systemctl stop openclaw-gateway && sudo kill \$(lsof -ti:3000) 2>/dev/null; echo \"OpenClaw stopped\"'",
           "alias openclaw-restart='sudo systemctl restart openclaw-gateway; sudo kill \$(lsof -ti:3000) 2>/dev/null; sleep 1; sudo portal-ctl start; echo \"OpenClaw restarted\"'",
+          '',
         ].join('\n');
-        execSync(`cat >> ${rc} << 'PORTAL_ALIASES'\n${aliasBlock}\nPORTAL_ALIASES`, { stdio: 'pipe' });
+        appendFileSync(rc, aliasBlock);
       }
     } catch { /* non-critical */ }
   }
@@ -1673,13 +1694,15 @@ async function setupOpenClaw(rl) {
     "alias portal-status='sudo portal-ctl status'",
     "alias openclaw-stop='sudo systemctl stop openclaw-gateway && sudo kill \$(lsof -ti:3000) 2>/dev/null; echo \"OpenClaw stopped\"'",
     "alias openclaw-restart='sudo systemctl restart openclaw-gateway; sudo kill \$(lsof -ti:3000) 2>/dev/null; sleep 1; sudo portal-ctl start; echo \"OpenClaw restarted\"'",
+    '',
   ].join('\n');
   const bashrcPaths = [`${homeDir}/.bashrc`, '/root/.bashrc'];
   for (const rc of bashrcPaths) {
     try {
-      const existing = execSync(`cat ${rc} 2>/dev/null || echo ""`, { encoding: 'utf-8' });
+      if (!existsSync(rc)) continue;
+      const existing = readFileSync(rc, 'utf-8');
       if (!existing.includes('portal-start')) {
-        execSync(`cat >> ${rc} << 'PORTAL_ALIASES'\n${aliasBlock}\nPORTAL_ALIASES`, { stdio: 'pipe' });
+        appendFileSync(rc, aliasBlock);
       }
     } catch { /* non-critical */ }
   }
@@ -1757,50 +1780,98 @@ async function setupOpenClaw(rl) {
     console.log(`\n  ${icon.check} ${c.green}OpenClaw gateway already installed${c.reset}`);
   }
 
-  // ── 11b. Generate OpenClaw gateway config if missing ──
+  // ── 11b. Configure OpenClaw (model + API key + gateway settings) ──
   const clawDir = `${homeDir}/.openclaw`;
   const clawCfg = `${clawDir}/openclaw.json`;
 
   if (isInstalled('openclaw') && !fileExists(clawCfg)) {
-    console.log(`\n  ${c.cyan}Generating OpenClaw gateway config...${c.reset}`);
-    try {
-      // Create directory structure
-      execSync(`sudo -u ${realUser} mkdir -p ${clawDir}/workspace ${clawDir}/agents/main/sessions`, { stdio: 'pipe' });
+    // The config doesn't exist yet — run the interactive wizard so the user can
+    // pick their AI model and enter their API key.  Without this, the gateway
+    // starts but immediately crashes because it has no model configuration.
+    console.log();
+    console.log(`  ${c.bgCyan}${c.black}${c.bold}                                                ${c.reset}`);
+    console.log(`  ${c.bgCyan}${c.black}${c.bold}   ⚙️  OpenClaw Configuration Wizard              ${c.reset}`);
+    console.log(`  ${c.bgCyan}${c.black}${c.bold}                                                ${c.reset}`);
+    console.log();
+    console.log(`  ${c.cyan}Select your AI model and enter your API key.${c.reset}`);
+    console.log(`  ${c.dim}This is required for the gateway to start.${c.reset}`);
+    console.log();
 
-      // Generate a secure auth token
-      let authToken = '';
-      try { authToken = execSync('openssl rand -hex 24', { encoding: 'utf-8' }).trim(); } catch {
-        authToken = [...Array(48)].map(() => Math.floor(Math.random() * 16).toString(16)).join('');
+    // Pause our readline so OpenClaw's wizard can use stdin
+    rl.pause();
+    try {
+      execSync(`sudo -u ${realUser} -H openclaw configure`, { stdio: 'inherit' });
+      console.log(`\n  ${icon.check} ${c.green}OpenClaw configuration complete${c.reset}`);
+    } catch {
+      console.log(`\n  ${c.yellow}OpenClaw wizard exited — continuing setup...${c.reset}`);
+    }
+    rl.resume();
+  }
+
+  // Overlay our gateway settings on top of whatever config exists.
+  // `openclaw configure` creates model/auth config but doesn't set the gateway
+  // architecture we need (loopback binding, auth token, trusted proxies, etc.).
+  if (isInstalled('openclaw') && fileExists(clawCfg)) {
+    try {
+      const raw = execSync(`cat ${clawCfg}`, { encoding: 'utf-8' });
+      const cfg = JSON.parse(raw);
+      let changed = false;
+
+      if (!cfg.gateway) cfg.gateway = {};
+
+      // Enforce gateway settings for our reverse-proxy architecture
+      if (cfg.gateway.mode !== 'local') { cfg.gateway.mode = 'local'; changed = true; }
+      if (cfg.gateway.port !== 18789) { cfg.gateway.port = 18789; changed = true; }
+      if (cfg.gateway.bind !== 'loopback') { cfg.gateway.bind = 'loopback'; changed = true; }
+
+      // Generate auth token if missing (openclaw configure may not set one)
+      if (!cfg.gateway.auth?.token) {
+        if (!cfg.gateway.auth) cfg.gateway.auth = {};
+        try { cfg.gateway.auth.token = execSync('openssl rand -hex 24', { encoding: 'utf-8' }).trim(); } catch {
+          cfg.gateway.auth.token = [...Array(48)].map(() => Math.floor(Math.random() * 16).toString(16)).join('');
+        }
+        changed = true;
       }
 
-      const config = {
-        gateway: {
-          mode: 'local',
-          port: 18789,
-          bind: 'loopback',
-          trustedProxies: ['127.0.0.1'],
-          auth: { token: authToken },
-        },
-      };
+      // Trusted proxies — portal proxies from localhost
+      if (!cfg.gateway.trustedProxies) { cfg.gateway.trustedProxies = ['127.0.0.1']; changed = true; }
+      else if (!cfg.gateway.trustedProxies.includes('127.0.0.1')) { cfg.gateway.trustedProxies.push('127.0.0.1'); changed = true; }
 
       // Disable browser device-identity checks — our portal handles auth (password + optional TOTP 2FA)
-      // Without this, every new browser / incognito window requires manual device approval
-      config.gateway.controlUi = { dangerouslyDisableDeviceAuth: true };
+      if (!cfg.gateway.controlUi) cfg.gateway.controlUi = {};
+      if (!cfg.gateway.controlUi.dangerouslyDisableDeviceAuth) {
+        cfg.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
+        changed = true;
+      }
 
       // Add domain origins if we have a domain
       if (domain) {
-        config.gateway.controlUi.allowedOrigins = [`https://${domain}`, `https://www.${domain}`];
+        if (!cfg.gateway.controlUi.allowedOrigins) cfg.gateway.controlUi.allowedOrigins = [];
+        const origins = [`https://${domain}`, `https://www.${domain}`];
+        for (const origin of origins) {
+          if (!cfg.gateway.controlUi.allowedOrigins.includes(origin)) {
+            cfg.gateway.controlUi.allowedOrigins.push(origin);
+            changed = true;
+          }
+        }
       }
 
-      const cfgJson = JSON.stringify(config, null, 2).replace(/'/g, "'\\''");
-      execSync(`echo '${cfgJson}' > ${clawCfg}`, { stdio: 'pipe' });
-      execSync(`chown ${realUser}:${realUser} ${clawCfg}`, { stdio: 'pipe' });
-      console.log(`  ${icon.check} ${c.green}Config created: ${clawCfg}${c.reset}`);
-      console.log(`  ${icon.check} ${c.green}Auth token: ${authToken.slice(0, 8)}...${c.reset}`);
+      if (changed) {
+        const cfgJson = JSON.stringify(cfg, null, 2).replace(/'/g, "'\\''");
+        execSync(`echo '${cfgJson}' > ${clawCfg}`, { stdio: 'pipe' });
+        execSync(`chown ${realUser}:${realUser} ${clawCfg}`, { stdio: 'pipe' });
+      }
+
+      const token = cfg.gateway?.auth?.token || '';
+      if (token) {
+        console.log(`  ${icon.check} ${c.green}Gateway config ready (token: ${token.slice(0, 8)}...)${c.reset}`);
+      }
     } catch (err) {
-      console.log(`  ${icon.x} ${c.red}Failed to generate config: ${err.message}${c.reset}`);
+      console.log(`  ${icon.x} ${c.red}Failed to configure gateway settings: ${err.message}${c.reset}`);
       console.log(`  ${c.yellow}Run manually: ${c.bold}sudo -u ${realUser} openclaw configure${c.reset}`);
     }
+  } else if (isInstalled('openclaw')) {
+    console.log(`  ${c.yellow}No config created. Run manually: ${c.bold}sudo -u ${realUser} openclaw configure${c.reset}`);
   }
   let gatewayToken = '';
 
@@ -1841,13 +1912,25 @@ async function setupOpenClaw(rl) {
     }
   }
 
-  // Set controlUi.allowedOrigins so OpenClaw accepts Control UI requests from our reverse proxy
+  // Ensure gateway settings are correct (safety net — also handled in step 11b)
   if (isInstalled('openclaw') && fileExists(clawCfg)) {
     try {
       const raw = execSync(`cat ${clawCfg}`, { encoding: 'utf-8' });
       const cfg = JSON.parse(raw);
       let changed = false;
       if (!cfg.gateway) cfg.gateway = {};
+
+      // Enforce architecture settings
+      if (cfg.gateway.mode !== 'local') { cfg.gateway.mode = 'local'; changed = true; }
+      if (cfg.gateway.port !== 18789) { cfg.gateway.port = 18789; changed = true; }
+      if (cfg.gateway.bind !== 'loopback') { cfg.gateway.bind = 'loopback'; changed = true; }
+
+      // Ensure auth token — write the token we captured into the gateway config if missing
+      if (!cfg.gateway.auth?.token && gatewayToken) {
+        if (!cfg.gateway.auth) cfg.gateway.auth = {};
+        cfg.gateway.auth.token = gatewayToken;
+        changed = true;
+      }
 
       // Ensure dangerouslyDisableDeviceAuth is set (portal handles auth)
       if (!cfg.gateway.controlUi) cfg.gateway.controlUi = {};

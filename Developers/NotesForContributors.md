@@ -108,7 +108,7 @@ root check
 | `platforms` | `sudo bash ~/PlatformTools/platformInstaller.sh`  |
 
 **Key design decisions:**
-- Aliases are appended to `.bashrc` (never overwritten)
+- Aliases are appended to `.bashrc` using Node.js `appendFileSync` (never overwritten)
 - SSH keys are copied to both the new user and root
 - Node.js is installed via NodeSource, not the Debian repo (ensures LTS version)
 - UFW rules are batched and enabled once at the end
@@ -372,7 +372,7 @@ OpenClaw's Control UI generates a per-browser device identity (crypto keypair st
 }
 ```
 
-This is set automatically during config generation (step 11b) and enforced by the health check (check 4). The "dangerously" prefix is OpenClaw's convention for security-downgrade flags — in our case it's safe because the portal IS the auth boundary.
+This is set automatically during setup (step 11b runs `openclaw configure` then overlays our gateway settings) and enforced by the health check (check 4). The "dangerously" prefix is OpenClaw's convention for security-downgrade flags — in our case it's safe because the portal IS the auth boundary.
 
 Without this flag, users would see "Disconnected from gateway" or "pairing required" errors when opening the dashboard in a new browser or incognito window.
 
@@ -522,23 +522,23 @@ User selects OpenClaw (AI Stack or individual)
         │       ├── Create 1GB swap if none exists (prevents OOM on small VPS)
         │       └── curl -fsSL https://openclaw.ai/install.sh | bash
         │
-        ├── 11b. Generate OpenClaw gateway config
-        │       ├── Create ~/.openclaw dir + workspace + sessions
-        │       ├── Generate auth token with openssl rand -hex 24
-        │       ├── Write openclaw.json with strict schema:
+        ├── 11b. Configure OpenClaw (model + API key + gateway settings)
+        │       ├── If no config: run `openclaw configure` interactively
+        │       │       (user picks AI model + enters API key)
+        │       ├── Overlay gateway settings on top of wizard output:
         │       │       gateway.mode: 'local'
         │       │       gateway.port: 18789
         │       │       gateway.bind: 'loopback'
         │       │       gateway.trustedProxies: ['127.0.0.1']
-        │       │       gateway.auth.token: <generated>
+        │       │       gateway.auth.token: <generated if missing>
         │       │       gateway.controlUi.dangerouslyDisableDeviceAuth: true
         │       └── Add domain controlUi.allowedOrigins if domain was configured
         │
-        ├── 12. Capture gateway token
-        │       ├── Auto-read from ~/.openclaw/openclaw.json
+        ├── 12. Capture gateway token + enforce gateway settings
+        │       ├── Auto-read token from ~/.openclaw/openclaw.json
         │       ├── If not found: prompt user to paste URL or raw token
         │       ├── Extract token from URL (#token=xxx) or use raw input
-        │       ├── Add domain origins to gateway.controlUi.allowedOrigins
+        │       ├── Re-enforce gateway.mode/port/bind + controlUi settings
         │       └── Save OPENCLAW_TOKEN to portal .env
         │
         ├── 13. Create systemd service (openclaw-gateway.service)
