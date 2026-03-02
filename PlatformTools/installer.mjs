@@ -345,15 +345,16 @@ async function setupOpenClawDomain(rl) {
     createCaddyConfig(domain);
   }
 
-  // ── Install certbot if not present ──────────
+  // ── Install certbot & webserver plugin ───────
   if (!isInstalled('certbot')) {
     console.log(`\n  ${c.cyan}Certbot is required for SSL. Installing...${c.reset}`);
     installPackage('certbot');
-    if (webserver === 'nginx') {
-      runApt('install', 'python3-certbot-nginx');
-    } else if (webserver === 'apache2') {
-      runApt('install', 'python3-certbot-apache');
-    }
+  }
+  // Always ensure the correct webserver plugin is installed
+  if (webserver === 'nginx') {
+    runApt('install', 'python3-certbot-nginx');
+  } else if (webserver === 'apache2') {
+    runApt('install', 'python3-certbot-apache');
   }
 
   // ── DNS instructions ────────────────────────

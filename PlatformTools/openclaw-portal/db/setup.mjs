@@ -6,7 +6,7 @@
 // the Platform Installer OpenClaw setup flow.
 
 import pg from 'pg';
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import { execSync } from 'child_process';
 import * as readline from 'readline';
 

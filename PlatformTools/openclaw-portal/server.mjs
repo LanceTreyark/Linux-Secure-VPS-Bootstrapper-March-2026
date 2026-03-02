@@ -5,7 +5,7 @@ import connectPgSimple from 'connect-pg-simple';
 import passport from 'passport';
 import { Strategy as LocalStrategy } from 'passport-local';
 import { createProxyMiddleware } from 'http-proxy-middleware';
-import bcrypt from 'bcrypt';
+import bcrypt from 'bcryptjs';
 import pg from 'pg';
 import { fileURLToPath } from 'url';
 import path from 'path';
