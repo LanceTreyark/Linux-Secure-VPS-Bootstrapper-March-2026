@@ -84,8 +84,17 @@ async function main() {
         id SERIAL PRIMARY KEY,
         username VARCHAR(100) UNIQUE NOT NULL,
         password_hash VARCHAR(255) NOT NULL,
+        totp_secret VARCHAR(255) DEFAULT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
+    `);
+
+    // Add totp_secret column if upgrading from an older schema
+    await appClient.query(`
+      DO $$ BEGIN
+        ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret VARCHAR(255) DEFAULT NULL;
+      EXCEPTION WHEN duplicate_column THEN NULL;
+      END $$
     `);
     console.log('  ✅ Users table ready.');
 

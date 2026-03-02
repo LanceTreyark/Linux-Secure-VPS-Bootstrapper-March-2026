@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenClaw — Two-Factor Authentication</title>
+  <link rel="stylesheet" href="/css/login.css">
+</head>
+<body>
+  <div class="bg-grid"></div>
+  <div class="container">
+    <div class="login-card">
+      <div class="logo-section">
+        <div class="logo-icon">
+          <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="24" cy="24" r="22" stroke="url(#grad)" stroke-width="2.5" fill="none"/>
+            <rect x="14" y="18" width="20" height="16" rx="3" fill="url(#grad)" opacity="0.8"/>
+            <path d="M18 18v-4a6 6 0 0 1 12 0v4" stroke="url(#grad)" stroke-width="2.5" fill="none"/>
+            <circle cx="24" cy="27" r="2.5" fill="#0a0a0f"/>
+            <defs>
+              <linearGradient id="grad" x1="0" y1="0" x2="48" y2="48">
+                <stop offset="0%" stop-color="#6366f1"/>
+                <stop offset="100%" stop-color="#8b5cf6"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+        <h1>Two-Factor Auth</h1>
+        <p class="subtitle">Enter your authenticator code</p>
+      </div>
+
+      <% if (error) { %>
+        <div class="error-msg">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm-.75 4a.75.75 0 0 1 1.5 0v3a.75.75 0 0 1-1.5 0V5zm.75 6.5a1 1 0 1 1 0-2 1 1 0 0 1 0 2z"/></svg>
+          <span><%= error %></span>
+        </div>
+      <% } %>
+
+      <form action="/2fa/verify" method="POST" autocomplete="off">
+        <div class="input-group">
+          <label for="code">6-Digit Code</label>
+          <div class="input-wrapper">
+            <svg class="input-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            <input type="text" id="code" name="code" placeholder="000 000" required autofocus
+                   maxlength="7" inputmode="numeric" pattern="[0-9\s]{6,7}"
+                   style="text-align:center; font-size:1.5rem; letter-spacing:0.5rem; font-weight:700">
+          </div>
+        </div>
+
+        <button type="submit" class="btn-login">
+          <span>Verify</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        </button>
+
+        <label style="display:flex; align-items:center; gap:8px; margin-top:16px; cursor:pointer; font-size:13px; color:#71717a; user-select:none">
+          <input type="checkbox" name="disable_2fa" value="1"
+                 style="width:16px; height:16px; accent-color:#6366f1; cursor:pointer">
+          <span>Disable 2FA after verification</span>
+        </label>
+      </form>
+
+      <div class="footer-text" style="margin-top:20px">
+        <span style="color:#71717a">Open your authenticator app to get the code</span>
+      </div>
+
+      <div class="footer-text">
+        Secured with TOTP &bull; <span class="version">v1.0</span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

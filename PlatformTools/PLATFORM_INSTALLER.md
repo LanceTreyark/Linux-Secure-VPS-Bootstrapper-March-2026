@@ -208,6 +208,16 @@ When OpenClaw is installed (individually or via AI Stack), the installer runs a 
 
 If no domain is provided, it skips straight to starting the gateway.
 
+### Two-Factor Authentication (Portal)
+
+After logging into the OpenClaw portal, users can enable TOTP-based two-factor authentication at `/2fa/setup`:
+
+1. **Scan QR code** — use any authenticator app (Google Authenticator, Authy, 1Password)
+2. **Enter verification code** — type the 6-digit code to confirm setup
+3. **2FA is now active** — every future login will require password + authenticator code
+
+To disable 2FA, visit `/2fa/setup` again and enter your password to confirm.
+
 ### Add a Website (TOOLS)
 
 When a web server is installed, the TOOLS section of the main menu shows an **"Add a Website"** option. This creates a complete static website with a landing page for any domain you own.

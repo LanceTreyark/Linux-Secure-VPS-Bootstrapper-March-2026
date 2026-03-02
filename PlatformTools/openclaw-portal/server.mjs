@@ -10,6 +10,8 @@ import pg from 'pg';
 import { fileURLToPath } from 'url';
 import { readFileSync, existsSync } from 'fs';
 import path from 'path';
+import * as OTPAuth from 'otpauth';
+import QRCode from 'qrcode';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -77,7 +79,7 @@ app.use(passport.session());
 passport.use(new LocalStrategy(async (username, password, done) => {
   try {
     const result = await pool.query(
-      'SELECT id, username, password_hash FROM users WHERE username = $1',
+      'SELECT id, username, password_hash, totp_secret FROM users WHERE username = $1',
       [username]
     );
     const user = result.rows[0];
@@ -86,7 +88,7 @@ passport.use(new LocalStrategy(async (username, password, done) => {
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return done(null, false, { message: 'Invalid username or password.' });
 
-    return done(null, { id: user.id, username: user.username });
+    return done(null, { id: user.id, username: user.username, totp_enabled: !!user.totp_secret });
   } catch (err) {
     return done(err);
   }
@@ -96,8 +98,10 @@ passport.serializeUser((user, done) => done(null, user.id));
 
 passport.deserializeUser(async (id, done) => {
   try {
-    const result = await pool.query('SELECT id, username FROM users WHERE id = $1', [id]);
-    done(null, result.rows[0] || null);
+    const result = await pool.query('SELECT id, username, totp_secret FROM users WHERE id = $1', [id]);
+    const row = result.rows[0];
+    if (!row) return done(null, null);
+    done(null, { id: row.id, username: row.username, totp_enabled: !!row.totp_secret });
   } catch (err) {
     done(err);
   }
@@ -105,13 +109,30 @@ passport.deserializeUser(async (id, done) => {
 
 // ── Auth middleware ──────────────────────────────
 function requireAuth(req, res, next) {
-  if (req.isAuthenticated()) return next();
-  res.redirect('/login');
+  if (!req.isAuthenticated()) return res.redirect('/login');
+  // If user has TOTP enabled but hasn't verified it this session, force verification
+  if (req.user.totp_enabled && !req.session.totp_verified) return res.redirect('/2fa/verify');
+  return next();
+}
+
+// ── Helper: create TOTP instance ────────────────
+function createTOTP(secret, username) {
+  return new OTPAuth.TOTP({
+    issuer: 'OpenClaw Portal',
+    label: username,
+    algorithm: 'SHA1',
+    digits: 6,
+    period: 30,
+    secret: OTPAuth.Secret.fromBase32(secret),
+  });
 }
 
 // ── Routes ──────────────────────────────────────
 app.get('/login', (req, res) => {
-  if (req.isAuthenticated()) return res.redirect('/');
+  if (req.isAuthenticated()) {
+    if (req.user.totp_enabled && !req.session.totp_verified) return res.redirect('/2fa/verify');
+    return res.redirect('/');
+  }
   const error = req.session.flashError || null;
   delete req.session.flashError;
   res.render('login', { error });
@@ -126,16 +147,137 @@ app.post('/login', (req, res, next) => {
     }
     req.logIn(user, (err) => {
       if (err) return next(err);
-      // Include OpenClaw dashboard token so the UI auto-authenticates
+      // If TOTP is enabled, go to verification before granting access
+      if (user.totp_enabled) {
+        req.session.totp_verified = false;
+        return res.redirect('/2fa/verify');
+      }
+      // No TOTP — go straight to dashboard
       res.redirect(openclawToken ? `/#token=${openclawToken}` : '/');
     });
   })(req, res, next);
 });
 
 app.post('/logout', requireAuth, (req, res) => {
+  req.session.totp_verified = false;
   req.logout(() => {
     res.redirect('/login');
   });
+});
+
+// ── 2FA: Verify code (after login) ──────────────
+app.get('/2fa/verify', (req, res) => {
+  if (!req.isAuthenticated()) return res.redirect('/login');
+  if (!req.user.totp_enabled) return res.redirect('/');
+  if (req.session.totp_verified) return res.redirect('/');
+  const error = req.session.flashError || null;
+  delete req.session.flashError;
+  res.render('totp-verify', { error });
+});
+
+app.post('/2fa/verify', async (req, res) => {
+  if (!req.isAuthenticated()) return res.redirect('/login');
+  const code = (req.body.code || '').replace(/\s/g, '');
+
+  try {
+    const result = await pool.query('SELECT totp_secret FROM users WHERE id = $1', [req.user.id]);
+    const secret = result.rows[0]?.totp_secret;
+    if (!secret) return res.redirect('/');
+
+    const totp = createTOTP(secret, req.user.username);
+    const delta = totp.validate({ token: code, window: 1 });
+
+    if (delta !== null) {
+      req.session.totp_verified = true;
+
+      // If the user checked "disable 2FA", remove TOTP now that they proved they own it
+      if (req.body.disable_2fa) {
+        await pool.query('UPDATE users SET totp_secret = NULL WHERE id = $1', [req.user.id]);
+        req.user.totp_enabled = false;
+        req.session.totp_verified = false;
+      }
+
+      return res.redirect(openclawToken ? `/#token=${openclawToken}` : '/');
+    }
+
+    req.session.flashError = 'Invalid authenticator code. Try again.';
+    res.redirect('/2fa/verify');
+  } catch (err) {
+    req.session.flashError = 'Verification error. Try again.';
+    res.redirect('/2fa/verify');
+  }
+});
+
+// ── 2FA: Setup (enable TOTP) ────────────────────
+app.get('/2fa/setup', requireAuth, async (req, res) => {
+  const secret = new OTPAuth.Secret({ size: 20 });
+  const totp = new OTPAuth.TOTP({
+    issuer: 'OpenClaw Portal',
+    label: req.user.username,
+    algorithm: 'SHA1',
+    digits: 6,
+    period: 30,
+    secret,
+  });
+
+  const otpauthUrl = totp.toString();
+  const qrDataUrl = await QRCode.toDataURL(otpauthUrl);
+
+  // Store pending secret in session until user verifies
+  req.session.pendingTotpSecret = secret.base32;
+
+  res.render('totp-setup', {
+    qrDataUrl,
+    secret: secret.base32,
+    error: req.session.flashError || null,
+    totpEnabled: req.user.totp_enabled,
+  });
+  delete req.session.flashError;
+});
+
+app.post('/2fa/enable', requireAuth, async (req, res) => {
+  const code = (req.body.code || '').replace(/\s/g, '');
+  const pendingSecret = req.session.pendingTotpSecret;
+
+  if (!pendingSecret) {
+    req.session.flashError = 'Setup expired. Please start again.';
+    return res.redirect('/2fa/setup');
+  }
+
+  const totp = createTOTP(pendingSecret, req.user.username);
+  const delta = totp.validate({ token: code, window: 1 });
+
+  if (delta === null) {
+    req.session.flashError = 'Invalid code. Scan the QR code again and enter a fresh code.';
+    return res.redirect('/2fa/setup');
+  }
+
+  // Save the secret to the database
+  await pool.query('UPDATE users SET totp_secret = $1 WHERE id = $2', [pendingSecret, req.user.id]);
+  delete req.session.pendingTotpSecret;
+  req.session.totp_verified = true;
+  req.user.totp_enabled = true;
+
+  res.redirect('/?2fa=enabled');
+});
+
+app.post('/2fa/disable', requireAuth, async (req, res) => {
+  // Require current password to disable 2FA
+  const password = req.body.password || '';
+  const result = await pool.query('SELECT password_hash FROM users WHERE id = $1', [req.user.id]);
+  const hash = result.rows[0]?.password_hash;
+
+  if (!hash || !(await bcrypt.compare(password, hash))) {
+    req.session.flashError = 'Incorrect password. 2FA was not disabled.';
+    return res.redirect('/2fa/setup');
+  }
+
+  await pool.query('UPDATE users SET totp_secret = NULL WHERE id = $1', [req.user.id]);
+  req.user.totp_enabled = false;
+  req.session.totp_verified = false;
+  delete req.session.pendingTotpSecret;
+
+  res.redirect('/?2fa=disabled');
 });
 
 // ── Proxy to OpenClaw gateway (authenticated) ───

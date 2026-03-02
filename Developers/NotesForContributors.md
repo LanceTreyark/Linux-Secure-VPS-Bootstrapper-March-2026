@@ -209,9 +209,11 @@ User → Nginx (:443) → Portal (:3000) → OpenClaw Gateway (:18789)
 
 | File             | Purpose                                                    |
 |------------------|------------------------------------------------------------|
-| `server.mjs`     | Express server, Passport local strategy, session config, proxy middleware |
-| `db/setup.mjs`   | Creates PostgreSQL role, database, `users` table, `user_sessions` table, admin user |
+| `server.mjs`     | Express server, Passport local strategy, TOTP 2FA, session config, proxy middleware |
+| `db/setup.mjs`   | Creates PostgreSQL role, database, `users` table (with `totp_secret`), `user_sessions` table, admin user |
 | `views/login.ejs` | EJS login page with dark theme, animated background, SVG icons |
+| `views/totp-verify.ejs` | 2FA code entry page (shown after password login when TOTP is enabled) |
+| `views/totp-setup.ejs` | 2FA setup/disable page with QR code, manual secret, and verification |
 | `public/css/login.css` | CSS with custom properties, animations, responsive design |
 | `portal-ctl.sh`  | Management script for start/stop/status/health             |
 | `.env.example`   | Environment variable template                              |
@@ -222,8 +224,42 @@ User → Nginx (:443) → Portal (:3000) → OpenClaw Gateway (:18789)
 - PostgreSQL via `pg` + `connect-pg-simple` for sessions
 - `bcryptjs` (pure JS, 12 rounds) for password hashing — chosen over native `bcrypt` to avoid node-gyp/native compilation issues
 - `http-proxy-middleware` v3 for proxying to OpenClaw with WebSocket support (uses `on: { error }` event syntax, not the v2 `onError` property)
+- `otpauth` + `qrcode` for TOTP two-factor authentication (pure JS, no native deps)
 - `dotenv` for environment configuration
 - On startup, reads the OpenClaw gateway token from `OPENCLAW_TOKEN` env var or `~/.openclaw/openclaw.json` and injects it into the login redirect URL (`/#token=xxx`) so the OpenClaw dashboard auto-authenticates after portal login
+
+**Two-factor authentication (TOTP):**
+
+The portal supports optional TOTP-based 2FA using any authenticator app (Google Authenticator, Authy, 1Password, etc.).
+
+```
+Login flow with 2FA:
+  POST /login (username + password)
+    │
+    ├── TOTP not enabled → redirect to dashboard (/#token=xxx)
+    │
+    └── TOTP enabled → redirect to /2fa/verify
+          │
+          POST /2fa/verify (6-digit code + optional disable_2fa checkbox)
+            │
+            ├── Valid + disable_2fa checked → remove totp_secret → redirect to dashboard
+            ├── Valid → session.totp_verified = true → redirect to dashboard
+            └── Invalid → retry
+
+Setup flow:
+  GET /2fa/setup → generates secret, shows QR code + manual key
+  POST /2fa/enable (6-digit code) → verifies code, saves secret to DB
+
+Disable flow (two options):
+  1. On /2fa/verify: check "Disable 2FA" checkbox + enter correct code → removes totp_secret
+  2. On /2fa/setup: POST /2fa/disable (current password) → removes totp_secret from DB
+```
+
+- The `requireAuth` middleware checks both `req.isAuthenticated()` and `req.session.totp_verified` — if TOTP is enabled but not yet verified this session, the user is redirected to `/2fa/verify`
+- Secrets are stored as Base32 strings in the `totp_secret` column (NULL = TOTP disabled)
+- QR codes are generated server-side via the `qrcode` library (Data URL) so no external API calls are made
+- Disabling 2FA can be done two ways: (1) on the verify page by checking "Disable 2FA after verification" and entering a valid code, or (2) on the setup page by entering the current password — both require proof of identity
+- Users access the setup page at `/2fa/setup` after logging in
 
 **Database schema:**
 ```sql
@@ -232,6 +268,7 @@ users (
     id SERIAL PRIMARY KEY,
     username VARCHAR(255) UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
+    totp_secret VARCHAR(255) DEFAULT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW()
 )
 
