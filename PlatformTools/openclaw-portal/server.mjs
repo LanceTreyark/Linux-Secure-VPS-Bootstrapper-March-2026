@@ -264,7 +264,7 @@ app.post('/2fa/enable', requireAuth, async (req, res) => {
   req.session.totp_verified = true;
   req.user.totp_enabled = true;
 
-  res.redirect('/?2fa=enabled');
+  res.redirect('/2fa/done?action=enabled');
 });
 
 app.post('/2fa/disable', requireAuth, async (req, res) => {
@@ -283,23 +283,58 @@ app.post('/2fa/disable', requireAuth, async (req, res) => {
   req.session.totp_verified = false;
   delete req.session.pendingTotpSecret;
 
-  res.redirect('/?2fa=disabled');
+  res.redirect('/2fa/done?action=disabled');
+});
+
+// ── 2FA: Done page (gateway-independent confirmation) ──
+app.get('/2fa/done', requireAuth, (req, res) => {
+  const action = req.query.action === 'disabled' ? 'disabled' : 'enabled';
+  const dashUrl = openclawToken ? `/#token=${openclawToken}` : '/';
+  const color = action === 'enabled' ? '#22c55e' : '#f59e0b';
+  const icon = action === 'enabled'
+    ? '<polyline points="22 4 12 14.01 9 11.01"/><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>'
+    : '<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>';
+  const label = action === 'enabled'
+    ? 'Two-Factor Authentication Enabled'
+    : 'Two-Factor Authentication Disabled';
+  const desc = action === 'enabled'
+    ? 'Your authenticator app is now linked. You\u2019ll need to enter a code each time you sign in.'
+    : '2FA has been removed from your account. You can re-enable it anytime from the login page.';
+
+  res.send(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenClaw — 2FA ${action === 'enabled' ? 'Enabled' : 'Disabled'}</title><link rel="stylesheet" href="/css/login.css"></head>
+<body><div class="bg-grid"></div><div class="container"><div class="login-card" style="text-align:center">
+<svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="2" style="margin:0 auto 16px">${icon}</svg>
+<h2 style="color:${color};margin:0 0 8px;font-size:1.25rem">${label}</h2>
+<p style="color:#a1a1aa;font-size:14px;line-height:1.6;margin:0 0 24px">${desc}</p>
+<a href="${dashUrl}" class="btn-login" style="text-decoration:none;display:inline-flex;justify-content:center;max-width:220px;margin:0 auto">
+<span>Continue to Dashboard</span>
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+</a>
+<a href="/2fa/setup" style="display:block;margin-top:16px;color:#71717a;font-size:13px;text-decoration:none">2FA Settings</a>
+</div></div></body></html>`);
 });
 
 // ── Proxy to OpenClaw gateway (authenticated) ───
-app.use('/', requireAuth, createProxyMiddleware({
+const openclawProxy = createProxyMiddleware({
   target: `http://127.0.0.1:${OPENCLAW_PORT}`,
   changeOrigin: true,
   ws: true,
   on: {
     proxyReq: (proxyReq) => {
-      // Inject the gateway auth token so OpenClaw accepts the request
+      // Inject the gateway auth token so OpenClaw accepts HTTP requests
+      if (openclawToken) {
+        proxyReq.setHeader('Authorization', `Bearer ${openclawToken}`);
+      }
+    },
+    proxyReqWs: (proxyReq) => {
+      // Inject the gateway auth token for WebSocket upgrade requests too
       if (openclawToken) {
         proxyReq.setHeader('Authorization', `Bearer ${openclawToken}`);
       }
     },
     error: (err, req, res) => {
-      if (res.headersSent) return;
+      if (!res || res.headersSent) return;
       res.writeHead(502, { 'Content-Type': 'text/html' });
       res.end(`
         <div style="font-family:system-ui;color:#e4e4e7;background:#0a0a0f;min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px">
@@ -312,11 +347,17 @@ app.use('/', requireAuth, createProxyMiddleware({
       `);
     },
   },
-}));
+});
+app.use('/', requireAuth, openclawProxy);
 
 // ── Start ───────────────────────────────────────
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`\n  🤖 OpenClaw Portal running on port ${PORT}`);
   console.log(`  ↳  Login:    http://localhost:${PORT}/login`);
   console.log(`  ↳  Proxying: http://127.0.0.1:${OPENCLAW_PORT}\n`);
+});
+
+// Handle WebSocket upgrade at the server level (bypasses Express middleware)
+server.on('upgrade', (req, socket, head) => {
+  openclawProxy.upgrade(req, socket, head);
 });

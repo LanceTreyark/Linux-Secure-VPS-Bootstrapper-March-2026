@@ -605,7 +605,7 @@ async function repairOpenClaw(rl) {
   const gatewayServiceExists = fileExists('/etc/systemd/system/openclaw-gateway.service');
   if (gatewayServiceExists) {
     try {
-      const gwStatus = execSync('systemctl is-active openclaw-gateway 2>/dev/null', { encoding: 'utf-8' }).trim();
+      const gwStatus = execSync('systemctl is-active openclaw-gateway 2>/dev/null || echo stopped', { encoding: 'utf-8' }).trim();
       if (gwStatus === 'active') {
         console.log(`${icon.check} ${c.green}running${c.reset}`);
       } else {
@@ -615,10 +615,12 @@ async function repairOpenClaw(rl) {
       issuesFound++;
       console.log(`${icon.x} ${c.red}not running — restarting...${c.reset}`);
       try {
+        // Auto-fix config issues before restart
+        try { execSync(`sudo -u ${realUser} openclaw doctor --fix 2>/dev/null`, { stdio: 'pipe' }); } catch { /* ignore */ }
         execSync('systemctl restart openclaw-gateway', { stdio: 'pipe' });
         // Wait a moment and verify it actually stayed running
         execSync('sleep 2', { stdio: 'pipe' });
-        const recheck = execSync('systemctl is-active openclaw-gateway 2>/dev/null', { encoding: 'utf-8' }).trim();
+        const recheck = execSync('systemctl is-active openclaw-gateway 2>/dev/null || echo stopped', { encoding: 'utf-8' }).trim();
         if (recheck === 'active') {
           console.log(`       ${icon.check} ${c.green}Gateway restarted${c.reset}`);
           issuesFixed++;
@@ -1061,10 +1063,10 @@ async function repairOpenClaw(rl) {
           "alias portal-start='sudo portal-ctl start'",
           "alias portal-stop='sudo portal-ctl stop'",
           "alias portal-status='sudo portal-ctl status'",
-          "alias openclaw-stop='sudo systemctl stop openclaw-gateway && sudo kill $(lsof -ti:3000) 2>/dev/null; echo OpenClaw stopped'",
-          "alias openclaw-restart='sudo systemctl restart openclaw-gateway && sudo kill $(lsof -ti:3000) 2>/dev/null; sleep 2; sudo portal-ctl start; echo OpenClaw restarted'",
+          "alias openclaw-stop='sudo systemctl stop openclaw-gateway && sudo kill \$(lsof -ti:3000) 2>/dev/null; echo \"OpenClaw stopped\"'",
+          "alias openclaw-restart='sudo systemctl restart openclaw-gateway && sudo kill \$(lsof -ti:3000) 2>/dev/null; sleep 2; sudo portal-ctl start; echo \"OpenClaw restarted\"'",
         ].join('\n');
-        execSync(`echo '${aliasBlock}' >> ${rc}`, { stdio: 'pipe' });
+        execSync(`cat >> ${rc} << 'PORTAL_ALIASES'\n${aliasBlock}\nPORTAL_ALIASES`, { stdio: 'pipe' });
       }
     } catch { /* non-critical */ }
   }
@@ -1664,15 +1666,15 @@ async function setupOpenClaw(rl) {
     "alias portal-start='sudo portal-ctl start'",
     "alias portal-stop='sudo portal-ctl stop'",
     "alias portal-status='sudo portal-ctl status'",
-    "alias openclaw-stop='sudo systemctl stop openclaw-gateway && sudo kill $(lsof -ti:3000) 2>/dev/null; echo OpenClaw stopped'",
-    "alias openclaw-restart='sudo systemctl restart openclaw-gateway && sudo kill $(lsof -ti:3000) 2>/dev/null; sleep 2; sudo portal-ctl start; echo OpenClaw restarted'",
+    "alias openclaw-stop='sudo systemctl stop openclaw-gateway && sudo kill \$(lsof -ti:3000) 2>/dev/null; echo \"OpenClaw stopped\"'",
+    "alias openclaw-restart='sudo systemctl restart openclaw-gateway && sudo kill \$(lsof -ti:3000) 2>/dev/null; sleep 2; sudo portal-ctl start; echo \"OpenClaw restarted\"'",
   ].join('\n');
   const bashrcPaths = [`${homeDir}/.bashrc`, '/root/.bashrc'];
   for (const rc of bashrcPaths) {
     try {
       const existing = execSync(`cat ${rc} 2>/dev/null || echo ""`, { encoding: 'utf-8' });
       if (!existing.includes('portal-start')) {
-        execSync(`echo '${aliasBlock}' >> ${rc}`, { stdio: 'pipe' });
+        execSync(`cat >> ${rc} << 'PORTAL_ALIASES'\n${aliasBlock}\nPORTAL_ALIASES`, { stdio: 'pipe' });
       }
     } catch { /* non-critical */ }
   }
@@ -1767,11 +1769,11 @@ async function setupOpenClaw(rl) {
       }
 
       const config = {
-        workspace: `${clawDir}/workspace`,
         gateway: {
+          mode: 'local',
           port: 18789,
           bind: 'loopback',
-          auth: { type: 'token', token: authToken },
+          auth: { token: authToken },
         },
       };
 
@@ -1883,6 +1885,9 @@ async function setupOpenClaw(rl) {
   try { serviceExists = fileExists('/etc/systemd/system/openclaw-gateway.service'); } catch { /* nope */ }
 
   if (!serviceExists && isInstalled('openclaw')) {
+    // Auto-fix config issues before starting the service
+    try { execSync(`sudo -u ${realUser} openclaw doctor --fix 2>/dev/null`, { stdio: 'pipe' }); } catch { /* ignore */ }
+
     let openclawBin = '';
     try { openclawBin = execSync('which openclaw', { encoding: 'utf-8' }).trim(); } catch { /* not found */ }
 
@@ -1913,18 +1918,26 @@ async function setupOpenClaw(rl) {
         execSync('systemctl daemon-reload', { stdio: 'pipe' });
         execSync('systemctl enable openclaw-gateway', { stdio: 'pipe' });
         execSync('systemctl start openclaw-gateway', { stdio: 'pipe' });
-        // Wait and verify gateway stays running
-        execSync('sleep 3', { stdio: 'pipe' });
-        const gwCheck = execSync('systemctl is-active openclaw-gateway 2>/dev/null', { encoding: 'utf-8' }).trim();
-        if (gwCheck === 'active') {
-          console.log(`  ${icon.check} ${c.green}OpenClaw gateway systemd service created & started${c.reset}`);
-        } else {
-          console.log(`  ${icon.x} ${c.yellow}Gateway started but may have crashed. Check: journalctl -u openclaw-gateway --no-pager -n 20${c.reset}`);
-        }
       } catch (err) {
         console.log(`  ${icon.x} ${c.red}Failed to create systemd service: ${err.message}${c.reset}`);
         console.log(`  ${c.dim}Start manually: openclaw gateway --port 18789${c.reset}`);
       }
+
+      // Verify gateway stays running (separate so creation errors don't mask startup errors)
+      try {
+        execSync('sleep 3', { stdio: 'pipe' });
+        const gwCheck = execSync('systemctl is-active openclaw-gateway 2>/dev/null || echo stopped', { encoding: 'utf-8' }).trim();
+        if (gwCheck === 'active') {
+          console.log(`  ${icon.check} ${c.green}OpenClaw gateway systemd service created & started${c.reset}`);
+        } else {
+          console.log(`  ${icon.x} ${c.yellow}Gateway service started but crashed. Checking logs...${c.reset}`);
+          try {
+            const journal = execSync('journalctl -u openclaw-gateway --no-pager -n 12 2>/dev/null || true', { encoding: 'utf-8' }).trim();
+            if (journal) console.log(`  ${c.dim}${journal}${c.reset}`);
+          } catch { /* ignore */ }
+          console.log(`  ${c.dim}Restart with: sudo systemctl restart openclaw-gateway${c.reset}`);
+        }
+      } catch { /* verification non-critical */ }
     }
   } else if (serviceExists) {
     // Restart to pick up new auth config
