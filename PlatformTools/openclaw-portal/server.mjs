@@ -286,6 +286,12 @@ app.use('/', requireAuth, createProxyMiddleware({
   changeOrigin: true,
   ws: true,
   on: {
+    proxyReq: (proxyReq) => {
+      // Inject the gateway auth token so OpenClaw accepts the request
+      if (openclawToken) {
+        proxyReq.setHeader('Authorization', `Bearer ${openclawToken}`);
+      }
+    },
     error: (err, req, res) => {
       if (res.headersSent) return;
       res.writeHead(502, { 'Content-Type': 'text/html' });
