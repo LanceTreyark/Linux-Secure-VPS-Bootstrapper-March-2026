@@ -53,7 +53,7 @@
         </button>
 
         <label style="display:flex; align-items:center; gap:8px; margin-top:16px; cursor:pointer; font-size:13px; color:#71717a; user-select:none">
-          <input type="checkbox" name="disable_2fa" value="1"
+          <input type="checkbox" name="disable_2fa" value="1"<%= typeof wantDisable !== 'undefined' && wantDisable ? ' checked' : '' %>
                  style="width:16px; height:16px; accent-color:#6366f1; cursor:pointer">
           <span>Disable 2FA after verification</span>
         </label>

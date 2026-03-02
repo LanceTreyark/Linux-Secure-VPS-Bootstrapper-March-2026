@@ -1061,6 +1061,8 @@ async function repairOpenClaw(rl) {
           "alias portal-start='sudo portal-ctl start'",
           "alias portal-stop='sudo portal-ctl stop'",
           "alias portal-status='sudo portal-ctl status'",
+          "alias openclaw-stop='sudo systemctl stop openclaw-gateway && sudo kill $(lsof -ti:3000) 2>/dev/null; echo OpenClaw stopped'",
+          "alias openclaw-restart='sudo systemctl restart openclaw-gateway && sudo kill $(lsof -ti:3000) 2>/dev/null; sleep 2; sudo portal-ctl start; echo OpenClaw restarted'",
         ].join('\n');
         execSync(`echo '${aliasBlock}' >> ${rc}`, { stdio: 'pipe' });
       }
@@ -1070,7 +1072,7 @@ async function repairOpenClaw(rl) {
     console.log(`${icon.x} ${c.yellow}missing — added to .bashrc${c.reset}`);
     issuesFixed++;
   } else {
-    console.log(`${icon.check} ${c.green}portal-start, portal-stop, portal-status OK${c.reset}`);
+    console.log(`${icon.check} ${c.green}portal-start/stop/status, openclaw-stop/restart OK${c.reset}`);
   }
 
   // ── Summary ───────────────────────────────────
@@ -1662,6 +1664,8 @@ async function setupOpenClaw(rl) {
     "alias portal-start='sudo portal-ctl start'",
     "alias portal-stop='sudo portal-ctl stop'",
     "alias portal-status='sudo portal-ctl status'",
+    "alias openclaw-stop='sudo systemctl stop openclaw-gateway && sudo kill $(lsof -ti:3000) 2>/dev/null; echo OpenClaw stopped'",
+    "alias openclaw-restart='sudo systemctl restart openclaw-gateway && sudo kill $(lsof -ti:3000) 2>/dev/null; sleep 2; sudo portal-ctl start; echo OpenClaw restarted'",
   ].join('\n');
   const bashrcPaths = [`${homeDir}/.bashrc`, '/root/.bashrc'];
   for (const rc of bashrcPaths) {
@@ -1672,7 +1676,7 @@ async function setupOpenClaw(rl) {
       }
     } catch { /* non-critical */ }
   }
-  console.log(`  ${icon.check} ${c.green}Aliases added: portal-start, portal-stop, portal-status${c.reset}`);
+  console.log(`  ${icon.check} ${c.green}Aliases added: portal-start, portal-stop, portal-status, openclaw-stop, openclaw-restart${c.reset}`);
 
   // ── 10. Start portal ──────────────────────────
   try {
@@ -1695,9 +1699,11 @@ async function setupOpenClaw(rl) {
   console.log(`${c.bgMagenta}${c.white}${c.bold}  ║  Portal Management Commands                  ║  ${c.reset}`);
   console.log(`${c.bgMagenta}${c.white}${c.bold}  ╚══════════════════════════════════════════════╝  ${c.reset}`);
   console.log();
-  console.log(`  ${c.cyan}${c.bold}portal-start${c.reset}    Start portal & enable auto-restart`);
-  console.log(`  ${c.cyan}${c.bold}portal-stop${c.reset}     Stop portal & disable auto-restart`);
-  console.log(`  ${c.cyan}${c.bold}portal-status${c.reset}   Check portal & auto-restart status`);
+  console.log(`  ${c.cyan}${c.bold}portal-start${c.reset}       Start portal & enable auto-restart`);
+  console.log(`  ${c.cyan}${c.bold}portal-stop${c.reset}        Stop portal & disable auto-restart`);
+  console.log(`  ${c.cyan}${c.bold}portal-status${c.reset}      Check portal & auto-restart status`);
+  console.log(`  ${c.cyan}${c.bold}openclaw-restart${c.reset}   Restart gateway + portal together`);
+  console.log(`  ${c.cyan}${c.bold}openclaw-stop${c.reset}      Stop gateway + portal together`);
   console.log();
   console.log(`  ${c.dim}A cron job runs every hour to check if the portal is alive.${c.reset}`);
   console.log(`  ${c.dim}Using portal-stop disables auto-restart until portal-start is used.${c.reset}`);

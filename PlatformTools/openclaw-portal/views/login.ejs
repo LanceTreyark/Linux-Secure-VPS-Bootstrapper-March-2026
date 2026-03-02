@@ -5,6 +5,31 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>OpenClaw — Login</title>
   <link rel="stylesheet" href="/css/login.css">
+  <style>
+    .auth-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 4px 0 16px;
+      cursor: pointer;
+      font-size: 13px;
+      color: #a1a1aa;
+      user-select: none;
+      transition: color 0.2s;
+    }
+    .auth-toggle:hover { color: #c4b5fd; }
+    .auth-toggle input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      accent-color: #6366f1;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .auth-toggle svg {
+      flex-shrink: 0;
+      opacity: 0.6;
+    }
+  </style>
 </head>
 <body>
   <div class="bg-grid"></div>
@@ -55,6 +80,12 @@
             </button>
           </div>
         </div>
+
+        <label class="auth-toggle">
+          <input type="checkbox" name="enable_2fa" value="1">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          <span>Enable Authenticator App</span>
+        </label>
 
         <button type="submit" class="btn-login">
           <span>Sign In</span>

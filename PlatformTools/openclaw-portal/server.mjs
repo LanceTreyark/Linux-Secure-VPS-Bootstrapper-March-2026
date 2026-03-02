@@ -150,8 +150,12 @@ app.post('/login', (req, res, next) => {
       // If TOTP is enabled, go to verification before granting access
       if (user.totp_enabled) {
         req.session.totp_verified = false;
+        // If they checked "Enable Authenticator" but already have it, pre-check disable
+        if (req.body.enable_2fa) req.session.want_disable_2fa = true;
         return res.redirect('/2fa/verify');
       }
+      // If user opted to enable 2FA, redirect to setup instead of dashboard
+      if (req.body.enable_2fa) return res.redirect('/2fa/setup');
       // No TOTP — go straight to dashboard
       res.redirect(openclawToken ? `/#token=${openclawToken}` : '/');
     });
@@ -171,8 +175,10 @@ app.get('/2fa/verify', (req, res) => {
   if (!req.user.totp_enabled) return res.redirect('/');
   if (req.session.totp_verified) return res.redirect('/');
   const error = req.session.flashError || null;
+  const wantDisable = !!req.session.want_disable_2fa;
   delete req.session.flashError;
-  res.render('totp-verify', { error });
+  delete req.session.want_disable_2fa;
+  res.render('totp-verify', { error, wantDisable });
 });
 
 app.post('/2fa/verify', async (req, res) => {

@@ -81,6 +81,29 @@ Features include:
   - **Generate Server SSH Key** — create a key so this server can SSH into other servers
   - **Health Check & Repair** — all-in-one OpenClaw diagnostics: domain setup/change, SSL, config, services, and auto-fix (requires OpenClaw)
 
+## Shell Aliases
+
+The following aliases are added to `.bashrc` during setup:
+
+**System (from start.sh):**
+
+| Alias       | Description                        |
+|-------------|------------------------------------|
+| `update`    | `sudo apt update && sudo apt upgrade -y` |
+| `bb`        | `btop` system monitor              |
+| `monitor`   | `btop` system monitor              |
+| `platforms` | Launch the Platform Installer      |
+
+**OpenClaw (from installer.mjs, when OpenClaw is installed):**
+
+| Alias              | Description                              |
+|--------------------|------------------------------------------|
+| `portal-start`     | Start the portal & enable auto-restart   |
+| `portal-stop`      | Stop the portal & disable auto-restart   |
+| `portal-status`    | Check portal & auto-restart status       |
+| `openclaw-restart` | Restart gateway + portal together        |
+| `openclaw-stop`    | Stop gateway + portal together           |
+
 ## Firewall Ports
 
 The following ports are opened by default:

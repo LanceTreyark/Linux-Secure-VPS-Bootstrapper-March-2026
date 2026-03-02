@@ -294,11 +294,13 @@ user_sessions (
 
 **Shell aliases (added during OpenClaw install):**
 
-| Alias            | Command                      |
-|------------------|------------------------------|
-| `portal-start`   | `sudo portal-ctl start`     |
-| `portal-stop`    | `sudo portal-ctl stop`      |
-| `portal-status`  | `sudo portal-ctl status`    |
+| Alias              | Command                      |
+|--------------------|------------------------------|
+| `portal-start`     | `sudo portal-ctl start`     |
+| `portal-stop`      | `sudo portal-ctl stop`      |
+| `portal-status`    | `sudo portal-ctl status`    |
+| `openclaw-stop`    | Stop gateway + kill portal   |
+| `openclaw-restart` | Restart gateway + portal together |
 
 **OpenClaw gateway token flow:**
 
@@ -454,7 +456,7 @@ User selects OpenClaw (AI Stack or individual)
         │
         ├── 8. Set up hourly cron job (portal-ctl health)
         │
-        ├── 9. Add aliases to .bashrc (portal-start/stop/status)
+        ├── 9. Add aliases to .bashrc (portal-start/stop/status, openclaw-stop/restart)
         │
         ├── 10. Start portal (portal-ctl start)
         │
@@ -463,6 +465,12 @@ User selects OpenClaw (AI Stack or individual)
         │       ├── Create 1GB swap if none exists (prevents OOM on small VPS)
         │       └── curl -fsSL https://openclaw.ai/install.sh | bash
         │
+        ├── 11b. Generate OpenClaw gateway config
+        │       ├── Create ~/.openclaw dir + workspace + sessions
+        │       ├── Generate auth token with openssl rand -hex 24
+        │       ├── Write openclaw.json (port 18789, loopback, token auth)
+        │       └── Add domain allowedOrigins if domain was configured
+        │
         ├── 12. Capture gateway token
         │       ├── Auto-read from ~/.openclaw/openclaw.json
         │       ├── If not found: prompt user to paste URL or raw token
@@ -470,10 +478,14 @@ User selects OpenClaw (AI Stack or individual)
         │       ├── Add domain origins to gateway.controlUi.allowedOrigins
         │       └── Save OPENCLAW_TOKEN to portal .env
         │
-        └── 13. Create systemd service (openclaw-gateway.service)
-                ├── ExecStart=openclaw gateway --port 18789
-                ├── Restart=on-failure, runs as deploy user
-                └── systemctl enable + start
+        ├── 13. Create systemd service (openclaw-gateway.service)
+        │       ├── ExecStart=openclaw gateway --port 18789
+        │       ├── Restart=on-failure, runs as deploy user
+        │       ├── systemctl enable + start
+        │       └── Wait 3s and verify gateway stays active
+        │
+        └── 14. Final portal restart (after gateway is confirmed running)
+                └── Kill old portal, sleep 1, portal-ctl start
 ```
 
 ---
