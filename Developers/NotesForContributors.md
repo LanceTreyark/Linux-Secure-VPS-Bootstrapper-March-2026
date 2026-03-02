@@ -301,13 +301,13 @@ user_sessions (
 
 **Shell aliases (added during OpenClaw install):**
 
-| Alias              | Command                      |
-|--------------------|------------------------------|
-| `portal-start`     | `sudo portal-ctl start`     |
-| `portal-stop`      | `sudo portal-ctl stop`      |
-| `portal-status`    | `sudo portal-ctl status`    |
-| `openclaw-stop`    | Stop gateway + kill portal   |
-| `openclaw-restart` | Restart gateway + portal together |
+| Alias              | Command                                                 |
+|--------------------|--------------------------------------------------------|
+| `portal-start`     | `sudo portal-ctl start`                                |
+| `portal-stop`      | `sudo portal-ctl stop`                                 |
+| `portal-status`    | `sudo portal-ctl status`                               |
+| `openclaw-stop`    | Stop gateway (systemctl + kill :18789) + kill portal   |
+| `openclaw-restart` | Clean stop both → systemctl start gateway → portal-ctl start |
 
 **OpenClaw gateway token flow:**
 
@@ -439,7 +439,7 @@ All sites deployed on this server follow a strict directory pattern:
 
 | Service                        | Manager  | Unit/Script                          | Notes                              |
 |--------------------------------|----------|--------------------------------------|------------------------------------|
-| OpenClaw Gateway               | systemd  | `openclaw-gateway.service`           | Device auth disabled via config    |
+| OpenClaw Gateway               | systemd  | `openclaw-gateway.service`           | PATH env included, device auth disabled via config |
 | OpenClaw Portal                | cron + portal-ctl | `/usr/local/bin/portal-ctl`  |                                    |
 | PostgreSQL                     | systemd  | `postgresql.service`                 |                                    |
 | Nginx                          | systemd  | `nginx.service`                      |                                    |
@@ -549,8 +549,13 @@ User selects OpenClaw (AI Stack or individual)
         │       ├── Wait 3s and verify gateway stays active (`is-active || echo stopped`)
         │       └── On failure: dump last 12 journal lines for debugging
         │
-        └── 14. Final portal restart (after gateway is confirmed running)
-                └── Kill old portal, sleep 1, portal-ctl start
+        ├── 14. Sync token after gateway start
+        │       ├── Re-read ACTUAL token from openclaw.json (gateway may change it on start)
+        │       └── Update portal .env if token differs from what was written earlier
+        │
+        └── 15. Final portal restart (after gateway is confirmed running)
+                ├── Kill old portal, sleep 1, portal-ctl start
+                └── Print "source ~/.bashrc" reminder for alias activation
 ```
 
 ---

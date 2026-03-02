@@ -9,7 +9,7 @@ import { execSync } from 'child_process';
 import * as readline from 'readline';
 import { fileURLToPath } from 'url';
 import path from 'path';
-import { readFileSync, appendFileSync, existsSync } from 'fs';
+import { readFileSync, appendFileSync, writeFileSync, existsSync } from 'fs';
 
 // Prevent child processes from stealing stdin (which kills readline).
 // Show stdout + stderr but feed /dev/null into stdin.
@@ -32,6 +32,7 @@ const c = {
   bgBlue:  '\x1b[44m',
   bgMagenta: '\x1b[45m',
   bgYellow: '\x1b[43m',
+  bgCyan: '\x1b[46m',
   black:   '\x1b[30m',
 };
 
@@ -645,15 +646,19 @@ async function repairOpenClaw(rl) {
     try {
       const openclawBin = execSync('which openclaw', { encoding: 'utf-8' }).trim();
       if (openclawBin) {
-        const serviceUnit = [
+        let systemPath = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+        try { systemPath = execSync('echo $PATH', { encoding: 'utf-8' }).trim(); } catch { /* use default */ }
+
+        const serviceContent = [
           '[Unit]', 'Description=OpenClaw Gateway', 'After=network.target postgresql.service', 'Wants=network.target', '',
           '[Service]', 'Type=simple', `User=${realUser}`, `Group=${realUser}`, `WorkingDirectory=${homeDir}`,
           `ExecStart=${openclawBin} gateway --port 18789`,
           'Restart=on-failure', 'RestartSec=5',
-          `Environment=HOME=${homeDir}`, 'Environment=NODE_ENV=production', '',
-          '[Install]', 'WantedBy=multi-user.target',
-        ].join('\\n');
-        execSync(`printf '${serviceUnit}' > /etc/systemd/system/openclaw-gateway.service`, { stdio: 'pipe' });
+          `Environment=HOME=${homeDir}`, 'Environment=NODE_ENV=production',
+          `Environment=PATH=${systemPath}`, '',
+          '[Install]', 'WantedBy=multi-user.target', '',
+        ].join('\n');
+        writeFileSync('/etc/systemd/system/openclaw-gateway.service', serviceContent);
         execSync('systemctl daemon-reload && systemctl enable openclaw-gateway && systemctl start openclaw-gateway', { stdio: 'pipe' });
         console.log(`       ${icon.check} ${c.green}Gateway service created & started${c.reset}`);
         issuesFixed++;
@@ -1088,8 +1093,8 @@ async function repairOpenClaw(rl) {
           "alias portal-start='sudo portal-ctl start'",
           "alias portal-stop='sudo portal-ctl stop'",
           "alias portal-status='sudo portal-ctl status'",
-          "alias openclaw-stop='sudo systemctl stop openclaw-gateway && sudo kill \$(lsof -ti:3000) 2>/dev/null; echo \"OpenClaw stopped\"'",
-          "alias openclaw-restart='sudo systemctl restart openclaw-gateway; sudo kill \$(lsof -ti:3000) 2>/dev/null; sleep 1; sudo portal-ctl start; echo \"OpenClaw restarted\"'",
+          "alias openclaw-stop='sudo systemctl stop openclaw-gateway 2>/dev/null; sudo kill \$(lsof -ti:18789) 2>/dev/null; sudo kill \$(lsof -ti:3000) 2>/dev/null; echo \"OpenClaw stopped\"'",
+          "alias openclaw-restart='sudo systemctl stop openclaw-gateway 2>/dev/null; sudo kill \$(lsof -ti:18789) 2>/dev/null; sudo kill \$(lsof -ti:3000) 2>/dev/null; sleep 1; sudo systemctl start openclaw-gateway; sleep 2; sudo portal-ctl start; echo \"OpenClaw restarted\"'",
           '',
         ].join('\n');
         appendFileSync(rc, aliasBlock);
@@ -1692,8 +1697,8 @@ async function setupOpenClaw(rl) {
     "alias portal-start='sudo portal-ctl start'",
     "alias portal-stop='sudo portal-ctl stop'",
     "alias portal-status='sudo portal-ctl status'",
-    "alias openclaw-stop='sudo systemctl stop openclaw-gateway && sudo kill \$(lsof -ti:3000) 2>/dev/null; echo \"OpenClaw stopped\"'",
-    "alias openclaw-restart='sudo systemctl restart openclaw-gateway; sudo kill \$(lsof -ti:3000) 2>/dev/null; sleep 1; sudo portal-ctl start; echo \"OpenClaw restarted\"'",
+    "alias openclaw-stop='sudo systemctl stop openclaw-gateway 2>/dev/null; sudo kill \$(lsof -ti:18789) 2>/dev/null; sudo kill \$(lsof -ti:3000) 2>/dev/null; echo \"OpenClaw stopped\"'",
+    "alias openclaw-restart='sudo systemctl stop openclaw-gateway 2>/dev/null; sudo kill \$(lsof -ti:18789) 2>/dev/null; sudo kill \$(lsof -ti:3000) 2>/dev/null; sleep 1; sudo systemctl start openclaw-gateway; sleep 2; sudo portal-ctl start; echo \"OpenClaw restarted\"'",
     '',
   ].join('\n');
   const bashrcPaths = [`${homeDir}/.bashrc`, '/root/.bashrc'];
@@ -1706,7 +1711,7 @@ async function setupOpenClaw(rl) {
       }
     } catch { /* non-critical */ }
   }
-  console.log(`  ${icon.check} ${c.green}Aliases added: portal-start, portal-stop, portal-status, openclaw-stop, openclaw-restart${c.reset}`);
+  console.log(`  ${icon.check} ${c.green}Aliases added to .bashrc (source ~/.bashrc or re-login to activate)${c.reset}`);
 
   // ── 10. Start portal ──────────────────────────
   try {
@@ -1796,6 +1801,12 @@ async function setupOpenClaw(rl) {
     console.log(`  ${c.cyan}Select your AI model and enter your API key.${c.reset}`);
     console.log(`  ${c.dim}This is required for the gateway to start.${c.reset}`);
     console.log();
+
+    // Create directory structure before running the wizard — OpenClaw needs these
+    // directories to exist so it can save auth profiles and agent config
+    try {
+      execSync(`sudo -u ${realUser} mkdir -p ${clawDir}/workspace ${clawDir}/agents/main/agent ${clawDir}/agents/main/sessions`, { stdio: 'pipe' });
+    } catch { /* non-critical — wizard may create them */ }
 
     // Pause our readline so OpenClaw's wizard can use stdin
     rl.pause();
@@ -1983,7 +1994,11 @@ async function setupOpenClaw(rl) {
     try { openclawBin = execSync('which openclaw', { encoding: 'utf-8' }).trim(); } catch { /* not found */ }
 
     if (openclawBin) {
-      const serviceUnit = [
+      // Get the current PATH so systemd can find node and other binaries
+      let systemPath = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+      try { systemPath = execSync('echo $PATH', { encoding: 'utf-8' }).trim(); } catch { /* use default */ }
+
+      const serviceContent = [
         '[Unit]',
         'Description=OpenClaw Gateway',
         'After=network.target postgresql.service',
@@ -1998,14 +2013,16 @@ async function setupOpenClaw(rl) {
         'Restart=on-failure',
         'RestartSec=5',
         `Environment=HOME=${homeDir}`,
-        `Environment=NODE_ENV=production`,
+        'Environment=NODE_ENV=production',
+        `Environment=PATH=${systemPath}`,
         '',
         '[Install]',
         'WantedBy=multi-user.target',
-      ].join('\\n');
+        '',
+      ].join('\n');
 
       try {
-        execSync(`printf '${serviceUnit}' > /etc/systemd/system/openclaw-gateway.service`, { stdio: 'pipe' });
+        writeFileSync('/etc/systemd/system/openclaw-gateway.service', serviceContent);
         execSync('systemctl daemon-reload', { stdio: 'pipe' });
         execSync('systemctl enable openclaw-gateway', { stdio: 'pipe' });
         execSync('systemctl start openclaw-gateway', { stdio: 'pipe' });
@@ -2038,7 +2055,31 @@ async function setupOpenClaw(rl) {
     } catch { /* non-critical */ }
   }
 
-  // ── 14. Final portal restart (after gateway is up) ──
+  // ── 14. Sync token after gateway start ──────
+  // The gateway may have regenerated or changed the token on first start.
+  // Re-read the ACTUAL token from the config and update portal .env to match.
+  try {
+    if (fileExists(clawCfg) && fileExists(`${portalDest}/.env`)) {
+      const raw = execSync(`cat ${clawCfg}`, { encoding: 'utf-8' });
+      const cfg = JSON.parse(raw);
+      const currentToken = cfg.gateway?.auth?.token || '';
+      if (currentToken) {
+        const envContent = execSync(`cat ${portalDest}/.env`, { encoding: 'utf-8' });
+        const envTokenMatch = envContent.match(/^OPENCLAW_TOKEN=(.+)$/m);
+        const envToken = envTokenMatch ? envTokenMatch[1].trim() : '';
+        if (currentToken !== envToken) {
+          if (envContent.includes('OPENCLAW_TOKEN=')) {
+            execSync(`sed -i 's/^OPENCLAW_TOKEN=.*/OPENCLAW_TOKEN=${currentToken}/' ${portalDest}/.env`, { stdio: 'pipe' });
+          } else {
+            execSync(`echo 'OPENCLAW_TOKEN=${currentToken}' >> ${portalDest}/.env`, { stdio: 'pipe' });
+          }
+          console.log(`  ${icon.check} ${c.green}Portal token synced with gateway${c.reset}`);
+        }
+      }
+    }
+  } catch { /* non-critical */ }
+
+  // ── 15. Final portal restart (after gateway is up) ──
   // Portal needs to start AFTER gateway so proxy connections succeed
   try {
     execSync('kill $(lsof -ti:3000) 2>/dev/null || true', { stdio: 'pipe' });
@@ -2053,6 +2094,7 @@ async function setupOpenClaw(rl) {
   } else {
     console.log(`  ${icon.rocket} ${c.green}${c.bold}OpenClaw Portal: http://your_server_ip:3000${c.reset}`);
   }
+  console.log(`\n  ${c.dim}Tip: Run ${c.bold}source ~/.bashrc${c.reset}${c.dim} or log out and back in to use aliases (openclaw-restart, portal-status, etc.)${c.reset}`);
   console.log();
 }
 
