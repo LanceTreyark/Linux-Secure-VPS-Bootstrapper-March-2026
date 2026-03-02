@@ -20,7 +20,7 @@ The target user runs `start.sh` once on a brand-new Debian 13 VPS, then uses the
 ## Repository Structure
 
 ```
-Linux_Initialization_Script_March_2026/
+Linux-Secure-VPS-Bootstrapper-March-2026/
 │
 ├── start.sh                        # Entry point — run once on fresh VPS
 ├── Q_Com.sh                        # Git quick-commit helper (dev tool)

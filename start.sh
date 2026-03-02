@@ -15,7 +15,7 @@
 # 1. SSH into your VPS as root using the IP address and root password provided by your hosting provider.
 # - Example: ssh root@your_vps_ip
 # 2. Run this one-liner to download and start the setup:
-# COMMAND: apt update && apt install -y curl && curl -fsSL https://github.com/LanceTreyark/Linux-Initialization-Script---March-2026/archive/refs/heads/main.tar.gz | tar -xz -C /tmp && bash /tmp/Linux-Initialization-Script---March-2026-main/start.sh
+# COMMAND: apt update && apt install -y curl && curl -fsSL https://github.com/LanceTreyark/Linux-Secure-VPS-Bootstrapper-March-2026/archive/refs/heads/main.tar.gz | tar -xz -C /tmp && bash /tmp/Linux-Secure-VPS-Bootstrapper-March-2026-main/start.sh
 # Note: The script will prompt you for the new username and password for the sudo user,
 # as well as your SSH public key for key-based authentication.
 #

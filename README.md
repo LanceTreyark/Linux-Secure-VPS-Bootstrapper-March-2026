@@ -28,7 +28,7 @@ ssh root@your_vps_ip
 One command — downloads the repo, extracts it, and runs the setup script:
 
 ```bash
-apt update && apt install -y curl && curl -fsSL https://github.com/LanceTreyark/Linux-Initialization-Script---March-2026/archive/refs/heads/main.tar.gz | tar -xz -C /tmp && bash /tmp/Linux-Initialization-Script---March-2026-main/start.sh
+apt update && apt install -y curl && curl -fsSL https://github.com/LanceTreyark/Linux-Secure-VPS-Bootstrapper-March-2026/archive/refs/heads/main.tar.gz | tar -xz -C /tmp && bash /tmp/Linux-Secure-VPS-Bootstrapper-March-2026-main/start.sh
 ```
 
 ### 3. Follow the prompts
