@@ -46,7 +46,9 @@ Linux-Secure-VPS-Bootstrapper-March-2026/
         ├── db/
         │   └── setup.mjs           # PostgreSQL schema + admin user creation
         ├── views/
-        │   └── login.ejs           # Login page template
+        │   ├── login.ejs           # Login page with 2FA checkbox
+        │   ├── totp-verify.ejs     # 2FA code entry page
+        │   └── totp-setup.ejs      # 2FA setup/disable page
         └── public/
             └── css/
                 └── login.css       # Login page styles
@@ -209,7 +211,7 @@ User → Nginx (:443) → Portal (:3000) → OpenClaw Gateway (:18789)
 
 | File             | Purpose                                                    |
 |------------------|------------------------------------------------------------|
-| `server.mjs`     | Express server, Passport local strategy, TOTP 2FA, session config, proxy middleware |
+| `server.mjs`     | Express server, Passport local strategy, TOTP 2FA, session config, HTTP + WebSocket proxy, `/2fa/done` confirmation page |
 | `db/setup.mjs`   | Creates PostgreSQL role, database, `users` table (with `totp_secret`), `user_sessions` table, admin user |
 | `views/login.ejs` | EJS login page with dark theme, animated background, SVG icons, "Enable Authenticator App" checkbox |
 | `views/totp-verify.ejs` | 2FA code entry page (shown after password login when TOTP is enabled) |
@@ -223,10 +225,10 @@ User → Nginx (:443) → Portal (:3000) → OpenClaw Gateway (:18789)
 - Passport.js with local strategy
 - PostgreSQL via `pg` + `connect-pg-simple` for sessions
 - `bcryptjs` (pure JS, 12 rounds) for password hashing — chosen over native `bcrypt` to avoid node-gyp/native compilation issues
-- `http-proxy-middleware` v3 for proxying to OpenClaw with WebSocket support (uses `on: { error }` event syntax, not the v2 `onError` property)
+- `http-proxy-middleware` v3 for proxying to OpenClaw (uses `on: { error, proxyReq, proxyReqWs }` event syntax, not the v2 `onError` property). Auth token is injected into both HTTP requests (`proxyReq`) and WebSocket upgrades (`proxyReqWs`). The server also calls `server.on('upgrade', ...)` to forward WebSocket connections through the proxy. The error handler checks `res.writeHead` existence because WebSocket upgrade errors receive a raw `Socket` object, not an HTTP `Response`
 - `otpauth` + `qrcode` for TOTP two-factor authentication (pure JS, no native deps)
 - `dotenv` for environment configuration
-- On startup, reads the OpenClaw gateway token from `OPENCLAW_TOKEN` env var or `~/.openclaw/openclaw.json` and injects it into the login redirect URL (`/#token=xxx`) so the OpenClaw dashboard auto-authenticates after portal login
+- On startup, reads the OpenClaw gateway token from `OPENCLAW_TOKEN` env var or `~/.openclaw/openclaw.json`. The token is used in two places: (1) injected into the login redirect URL (`/#token=xxx`) so the OpenClaw dashboard auto-authenticates after portal login, and (2) injected as an `Authorization: Bearer` header on every proxied HTTP request and WebSocket upgrade so the gateway accepts traffic from the portal
 
 **Two-factor authentication (TOTP):**
 
@@ -328,6 +330,56 @@ OpenClaw install → generates token → stored in ~/.openclaw/openclaw.json
         └── On login success → redirect to /#token=xxx
 ```
 
+**OpenClaw gateway config schema (`~/.openclaw/openclaw.json`):**
+
+OpenClaw uses a **strict JSON schema** — any unknown key causes the gateway to reject the config. Only these top-level keys are valid under `gateway`:
+
+```json
+{
+  "gateway": {
+    "mode": "local",
+    "port": 18789,
+    "bind": "loopback",
+    "trustedProxies": ["127.0.0.1"],
+    "auth": {
+      "token": "<hex string>"
+    },
+    "controlUi": {
+      "allowedOrigins": ["https://example.com"],
+      "dangerouslyDisableDeviceAuth": true
+    }
+  }
+}
+```
+
+- `mode` is required — `"local"` for single-server deployments
+- `trustedProxies` must include `"127.0.0.1"` so the portal's proxy headers are accepted
+- Do **not** add `workspace`, `auth.type`, or any other undocumented keys — the gateway will reject them
+- Use `openclaw doctor --fix` to auto-detect and repair config issues (run before every service start)
+- Use `openclaw config set gateway.key value` to modify individual keys at runtime
+
+**Device pairing:**
+
+OpenClaw's Control UI generates a per-browser device identity (crypto keypair stored in browser storage). Each new browser context (incognito, different browser, cleared storage) creates a new unknown device that would normally require manual approval via `openclaw devices approve`. Since our portal already authenticates users with password + optional TOTP 2FA, and the gateway is bound to loopback with token auth, we disable this check entirely:
+
+```json
+{
+  "gateway": {
+    "controlUi": {
+      "dangerouslyDisableDeviceAuth": true
+    }
+  }
+}
+```
+
+This is set automatically during config generation (step 11b) and enforced by the health check (check 4). The "dangerously" prefix is OpenClaw's convention for security-downgrade flags — in our case it's safe because the portal IS the auth boundary.
+
+Without this flag, users would see "Disconnected from gateway" or "pairing required" errors when opening the dashboard in a new browser or incognito window.
+
+**`/2fa/done` confirmation route:**
+
+After enabling or disabling 2FA, the portal redirects to `/2fa/done?action=enabled` or `/2fa/done?action=disabled` instead of the dashboard. This is a **gateway-independent** route — it renders a styled confirmation page server-side without proxying to OpenClaw. This prevents the user from hitting a gateway error page if the gateway is briefly unavailable after setup.
+
 **Idempotent recovery design:**
 
 The `setupOpenClaw()` function is designed for 1GB VPS servers that may OOM-kill during `npm install`. Every step checks its current state before acting:
@@ -385,12 +437,12 @@ All sites deployed on this server follow a strict directory pattern:
 
 **Service management:**
 
-| Service                        | Manager  | Unit/Script                          |
-|--------------------------------|----------|--------------------------------------|
-| OpenClaw Gateway               | systemd  | `openclaw-gateway.service`           |
-| OpenClaw Portal                | cron + portal-ctl | `/usr/local/bin/portal-ctl`  |
-| PostgreSQL                     | systemd  | `postgresql.service`                 |
-| Nginx                          | systemd  | `nginx.service`                      |
+| Service                        | Manager  | Unit/Script                          | Notes                              |
+|--------------------------------|----------|--------------------------------------|------------------------------------|
+| OpenClaw Gateway               | systemd  | `openclaw-gateway.service`           | Device auth disabled via config    |
+| OpenClaw Portal                | cron + portal-ctl | `/usr/local/bin/portal-ctl`  |                                    |
+| PostgreSQL                     | systemd  | `postgresql.service`                 |                                    |
+| Nginx                          | systemd  | `nginx.service`                      |                                    |
 
 New apps should pick ports in the 3001–9999 range and verify availability with `ss -tlnp` and `grep -r proxy_pass /etc/nginx/sites-enabled/`.
 
@@ -473,8 +525,14 @@ User selects OpenClaw (AI Stack or individual)
         ├── 11b. Generate OpenClaw gateway config
         │       ├── Create ~/.openclaw dir + workspace + sessions
         │       ├── Generate auth token with openssl rand -hex 24
-        │       ├── Write openclaw.json (port 18789, loopback, token auth)
-        │       └── Add domain allowedOrigins if domain was configured
+        │       ├── Write openclaw.json with strict schema:
+        │       │       gateway.mode: 'local'
+        │       │       gateway.port: 18789
+        │       │       gateway.bind: 'loopback'
+        │       │       gateway.trustedProxies: ['127.0.0.1']
+        │       │       gateway.auth.token: <generated>
+        │       │       gateway.controlUi.dangerouslyDisableDeviceAuth: true
+        │       └── Add domain controlUi.allowedOrigins if domain was configured
         │
         ├── 12. Capture gateway token
         │       ├── Auto-read from ~/.openclaw/openclaw.json
@@ -484,10 +542,12 @@ User selects OpenClaw (AI Stack or individual)
         │       └── Save OPENCLAW_TOKEN to portal .env
         │
         ├── 13. Create systemd service (openclaw-gateway.service)
+        │       ├── Run `openclaw doctor --fix` to validate config before start
         │       ├── ExecStart=openclaw gateway --port 18789
         │       ├── Restart=on-failure, runs as deploy user
-        │       ├── systemctl enable + start
-        │       └── Wait 3s and verify gateway stays active
+        │       ├── systemctl enable + start (separate try blocks for create vs verify)
+        │       ├── Wait 3s and verify gateway stays active (`is-active || echo stopped`)
+        │       └── On failure: dump last 12 journal lines for debugging
         │
         └── 14. Final portal restart (after gateway is confirmed running)
                 └── Kill old portal, sleep 1, portal-ctl start
@@ -578,9 +638,11 @@ This project is designed to run on a live Debian 13 VPS. There is no test suite 
 | File                  | Approx. Lines | Purpose              |
 |-----------------------|---------------|----------------------|
 | `start.sh`           | ~200          | VPS bootstrap        |
-| `installer.mjs`      | ~1539         | Package manager      |
-| `server.mjs`         | ~170          | Portal server        |
+| `installer.mjs`      | ~2485         | Package manager      |
+| `server.mjs`         | ~364          | Portal server        |
 | `db/setup.mjs`       | ~140          | DB schema setup      |
 | `portal-ctl.sh`      | ~85           | Process management   |
-| `login.ejs`          | ~100          | Login page template  |
+| `login.ejs`          | ~120          | Login page template  |
+| `totp-verify.ejs`    | ~80           | 2FA code entry       |
+| `totp-setup.ejs`     | ~80           | 2FA setup/disable    |
 | `login.css`          | ~250          | Login page styles    |

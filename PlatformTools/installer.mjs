@@ -647,7 +647,8 @@ async function repairOpenClaw(rl) {
         const serviceUnit = [
           '[Unit]', 'Description=OpenClaw Gateway', 'After=network.target postgresql.service', 'Wants=network.target', '',
           '[Service]', 'Type=simple', `User=${realUser}`, `Group=${realUser}`, `WorkingDirectory=${homeDir}`,
-          `ExecStart=${openclawBin} gateway --port 18789`, 'Restart=on-failure', 'RestartSec=5',
+          `ExecStart=${openclawBin} gateway --port 18789`,
+          'Restart=on-failure', 'RestartSec=5',
           `Environment=HOME=${homeDir}`, 'Environment=NODE_ENV=production', '',
           '[Install]', 'WantedBy=multi-user.target',
         ].join('\\n');
@@ -692,15 +693,19 @@ async function repairOpenClaw(rl) {
 
       if (!cfg.gateway) cfg.gateway = {};
 
-      // Remove invalid trustedProxies key if it exists (not in OpenClaw schema — causes crash)
-      if (cfg.gateway.trustedProxies) {
-        delete cfg.gateway.trustedProxies;
+      // Ensure trustedProxies includes 127.0.0.1 (portal proxies from localhost)
+      if (!cfg.gateway.trustedProxies) { cfg.gateway.trustedProxies = ['127.0.0.1']; changed = true; }
+      else if (!cfg.gateway.trustedProxies.includes('127.0.0.1')) { cfg.gateway.trustedProxies.push('127.0.0.1'); changed = true; }
+
+      // Disable browser device-identity checks — our portal handles auth
+      if (!cfg.gateway.controlUi) cfg.gateway.controlUi = {};
+      if (!cfg.gateway.controlUi.dangerouslyDisableDeviceAuth) {
+        cfg.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
         changed = true;
       }
 
       // allowedOrigins — required for reverse-proxied Control UI
       if (domain) {
-        if (!cfg.gateway.controlUi) cfg.gateway.controlUi = {};
         if (!cfg.gateway.controlUi.allowedOrigins) cfg.gateway.controlUi.allowedOrigins = [];
         const origins = [`https://${domain}`, `https://www.${domain}`];
         for (const origin of origins) {
@@ -1064,7 +1069,7 @@ async function repairOpenClaw(rl) {
           "alias portal-stop='sudo portal-ctl stop'",
           "alias portal-status='sudo portal-ctl status'",
           "alias openclaw-stop='sudo systemctl stop openclaw-gateway && sudo kill \$(lsof -ti:3000) 2>/dev/null; echo \"OpenClaw stopped\"'",
-          "alias openclaw-restart='sudo systemctl restart openclaw-gateway && sudo kill \$(lsof -ti:3000) 2>/dev/null; sleep 2; sudo portal-ctl start; echo \"OpenClaw restarted\"'",
+          "alias openclaw-restart='sudo systemctl restart openclaw-gateway; sudo kill \$(lsof -ti:3000) 2>/dev/null; sleep 1; sudo portal-ctl start; echo \"OpenClaw restarted\"'",
         ].join('\n');
         execSync(`cat >> ${rc} << 'PORTAL_ALIASES'\n${aliasBlock}\nPORTAL_ALIASES`, { stdio: 'pipe' });
       }
@@ -1667,7 +1672,7 @@ async function setupOpenClaw(rl) {
     "alias portal-stop='sudo portal-ctl stop'",
     "alias portal-status='sudo portal-ctl status'",
     "alias openclaw-stop='sudo systemctl stop openclaw-gateway && sudo kill \$(lsof -ti:3000) 2>/dev/null; echo \"OpenClaw stopped\"'",
-    "alias openclaw-restart='sudo systemctl restart openclaw-gateway && sudo kill \$(lsof -ti:3000) 2>/dev/null; sleep 2; sudo portal-ctl start; echo \"OpenClaw restarted\"'",
+    "alias openclaw-restart='sudo systemctl restart openclaw-gateway; sudo kill \$(lsof -ti:3000) 2>/dev/null; sleep 1; sudo portal-ctl start; echo \"OpenClaw restarted\"'",
   ].join('\n');
   const bashrcPaths = [`${homeDir}/.bashrc`, '/root/.bashrc'];
   for (const rc of bashrcPaths) {
@@ -1778,11 +1783,13 @@ async function setupOpenClaw(rl) {
         },
       };
 
+      // Disable browser device-identity checks — our portal handles auth (password + optional TOTP 2FA)
+      // Without this, every new browser / incognito window requires manual device approval
+      config.gateway.controlUi = { dangerouslyDisableDeviceAuth: true };
+
       // Add domain origins if we have a domain
       if (domain) {
-        config.gateway.controlUi = {
-          allowedOrigins: [`https://${domain}`, `https://www.${domain}`],
-        };
+        config.gateway.controlUi.allowedOrigins = [`https://${domain}`, `https://www.${domain}`];
       }
 
       const cfgJson = JSON.stringify(config, null, 2).replace(/'/g, "'\\''");
@@ -1842,15 +1849,15 @@ async function setupOpenClaw(rl) {
       let changed = false;
       if (!cfg.gateway) cfg.gateway = {};
 
-      // Remove invalid trustedProxies if it was set by an older installer version
-      if (cfg.gateway.trustedProxies) {
-        delete cfg.gateway.trustedProxies;
+      // Ensure dangerouslyDisableDeviceAuth is set (portal handles auth)
+      if (!cfg.gateway.controlUi) cfg.gateway.controlUi = {};
+      if (!cfg.gateway.controlUi.dangerouslyDisableDeviceAuth) {
+        cfg.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
         changed = true;
       }
 
       // Allow the domain origin in the control UI
       if (domain) {
-        if (!cfg.gateway.controlUi) cfg.gateway.controlUi = {};
         if (!cfg.gateway.controlUi.allowedOrigins) cfg.gateway.controlUi.allowedOrigins = [];
         const origins = [`https://${domain}`, `https://www.${domain}`];
         for (const origin of origins) {
