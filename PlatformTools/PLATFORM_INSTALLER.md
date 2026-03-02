@@ -183,6 +183,25 @@ Always available in the TOOLS section. Generates an Ed25519 SSH key pair **on th
 4. **Displays public key** — in a highlighted box for copying
 5. **Shows instructions** — how to add this key to the target server's `authorized_keys` (or use the "Add SSH Key" tool on the target)
 
+### Health Check & Repair (TOOLS)
+
+Visible when OpenClaw is installed. Runs a 10-point diagnostic scan and auto-fixes what it can without reinstalling anything. Also handles domain setup/change (replaces the old separate "Configure OpenClaw Domain" tool):
+
+| # | Check | Auto-fix |
+|---|-------|----------|
+| 1 | PostgreSQL running | `systemctl start postgresql` |
+| 2 | OpenClaw gateway service | Restart or create systemd unit |
+| 3 | Portal on port 3000 | `portal-ctl start` |
+| 4 | OpenClaw config (allowedOrigins + cleanup) | Add allowed origins, remove invalid keys, restart gateway |
+| 5 | Portal .env (OPENCLAW_TOKEN, SESSION_SECRET, DATABASE_URL) | Pull token from gateway config, generate secret |
+| 6 | Domain setup / change | Detect current domain; offer to set up or change via `setupOpenClawDomain()`, close port 3000, update origins, restart services |
+| 7 | Web server config (proxy_pass + SSL) | Reports status; suggests re-running health check if missing |
+| 8 | SSL certificate | Checks expiry, auto-renews if < 7 days; retries certbot if missing and DNS resolves |
+| 9 | portal-ctl + cron job | Install script + hourly health cron |
+| 10 | Shell aliases (portal-start/stop/status) | Append to .bashrc |
+
+Ends with a summary: all passed, all fixed, or N issues need manual attention.
+
 ### OpenClaw Setup
 
 When OpenClaw is installed (individually or via AI Stack), the installer runs a guided setup:

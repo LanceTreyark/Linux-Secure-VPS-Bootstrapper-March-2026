@@ -79,7 +79,7 @@ Features include:
   - **Git & SSH Key Setup** — configures Git and generates an Ed25519 SSH key for GitHub (requires Git)
   - **Add SSH Key** — authorize other developers or agents to SSH into this server
   - **Generate Server SSH Key** — create a key so this server can SSH into other servers
-  - **Configure OpenClaw Domain** — attach a domain to an existing OpenClaw installation (requires OpenClaw)
+  - **Health Check & Repair** — all-in-one OpenClaw diagnostics: domain setup/change, SSL, config, services, and auto-fix (requires OpenClaw)
 
 ## Firewall Ports
 

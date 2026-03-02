@@ -381,71 +381,685 @@ async function setupOpenClawDomain(rl) {
   console.log(`  ${c.yellow}DNS can take up to 24 hours to propagate, but usually works within minutes.${c.reset}`);
   console.log();
 
-  const dnsReady = await ask(rl, `  ${c.cyan}${c.bold}Have you added the DNS records and are they propagated? (y/n): ${c.reset}`);
+  // ── SSL certificate loop (retry-friendly) ───
+  let sslDone = false;
+  let currentDomain = domain;
 
-  if (dnsReady.toLowerCase() === 'y') {
+  while (!sslDone) {
+    const dnsReady = await ask(rl, `  ${c.cyan}${c.bold}Have you added the DNS records and are they propagated? (y/n): ${c.reset}`);
+
+    if (dnsReady.toLowerCase() !== 'y') {
+      console.log(`\n  ${c.yellow}No problem — you can come back later.${c.reset}`);
+      console.log(`  ${c.yellow}Use ${c.bold}"Health Check & Repair"${c.reset}${c.yellow} from the TOOLS menu to retry SSL at any time.${c.reset}`);
+      break;
+    }
+
+    // Verify DNS actually resolves before wasting a certbot attempt
+    console.log(`\n  ${c.cyan}Verifying DNS for ${c.bold}${currentDomain}${c.reset}${c.cyan}...${c.reset}`);
+    let resolvedIP = '';
+    try {
+      resolvedIP = execSync(`dig +short ${currentDomain} 2>/dev/null | head -1`, { encoding: 'utf-8' }).trim();
+    } catch { /* */ }
+    if (!resolvedIP) {
+      try { resolvedIP = execSync(`host ${currentDomain} 2>/dev/null | grep 'has address' | head -1 | awk '{print $NF}'`, { encoding: 'utf-8' }).trim(); } catch { /* */ }
+    }
+
+    if (!resolvedIP) {
+      console.log(`\n  ${icon.x} ${c.red}${c.bold}DNS is NOT resolving for ${currentDomain}${c.reset}`);
+      console.log(`  ${c.red}Certbot will fail if DNS isn't set up. Let's fix this first.${c.reset}`);
+      console.log();
+      console.log(`  ${c.white}Your DNS records should look like this:${c.reset}`);
+      console.log();
+      console.log(`  ${c.cyan}${c.bold}  Type   Name              Value${c.reset}`);
+      console.log(`  ${c.white}  ─────  ────────────────  ─────────────────${c.reset}`);
+      console.log(`  ${c.green}  A      ${currentDomain.padEnd(16)}  ${serverIP}${c.reset}`);
+      console.log(`  ${c.green}  A      www.${(currentDomain.length > 12 ? currentDomain.substring(0, 12) + '…' : currentDomain).padEnd(12)}  ${serverIP}${c.reset}`);
+      console.log();
+      console.log(`  ${c.yellow}${c.bold}Common issues:${c.reset}`);
+      console.log(`  ${c.white}  • Domain not registered or expired${c.reset}`);
+      console.log(`  ${c.white}  • A records point to the wrong IP (must be ${c.bold}${serverIP}${c.reset}${c.white})${c.reset}`);
+      console.log(`  ${c.white}  • DNS hasn't propagated yet (wait a few minutes, then retry)${c.reset}`);
+      console.log(`  ${c.white}  • Typo in the domain name${c.reset}`);
+      console.log();
+      console.log(`  ${c.cyan}${c.bold}1)${c.reset} Retry with same domain (${currentDomain})`);
+      console.log(`  ${c.cyan}${c.bold}2)${c.reset} Enter a different domain`);
+      console.log(`  ${c.cyan}${c.bold}3)${c.reset} Skip SSL for now (set up later)`);
+      const dnsChoice = await ask(rl, `\n  ${c.cyan}Choose (1-3): ${c.reset}`);
+      if (dnsChoice === '2') {
+        const newDomain = await ask(rl, `  ${c.cyan}Enter the correct domain: ${c.reset}`);
+        if (newDomain && newDomain.includes('.') && newDomain.length >= 3) {
+          currentDomain = newDomain.trim();
+          // Recreate web server config for new domain
+          if (webserver === 'nginx') { createNginxConfig(currentDomain); }
+          else if (webserver === 'apache2') { createApacheConfig(currentDomain); }
+          else if (webserver === 'caddy') { createCaddyConfig(currentDomain); }
+          console.log(`\n  ${icon.check} ${c.green}Domain changed to ${c.bold}${currentDomain}${c.reset}`);
+          console.log();
+          console.log(`  ${c.white}Make sure these DNS records exist:${c.reset}`);
+          console.log(`  ${c.cyan}${c.bold}  Type   Name              Value${c.reset}`);
+          console.log(`  ${c.white}  ─────  ────────────────  ─────────────────${c.reset}`);
+          console.log(`  ${c.green}  A      ${currentDomain.padEnd(16)}  ${serverIP}${c.reset}`);
+          console.log(`  ${c.green}  A      www.${(currentDomain.length > 12 ? currentDomain.substring(0, 12) + '…' : currentDomain).padEnd(12)}  ${serverIP}${c.reset}`);
+          console.log();
+        } else {
+          console.log(`  ${c.yellow}Invalid domain — keeping ${currentDomain}${c.reset}`);
+        }
+        continue; // loop back to DNS check
+      } else if (dnsChoice === '3') {
+        console.log(`\n  ${c.yellow}SSL skipped. Use ${c.bold}"Health Check & Repair"${c.reset}${c.yellow} from the TOOLS menu when ready.${c.reset}`);
+        break;
+      }
+      // dnsChoice === '1' or anything else → loop retries
+      continue;
+    }
+
+    // DNS resolves — check it points to this server
+    if (resolvedIP !== serverIP) {
+      console.log(`\n  ${c.yellow}${c.bold}⚠  DNS resolves, but to a different IP:${c.reset}`);
+      console.log(`  ${c.white}  ${currentDomain} → ${c.red}${c.bold}${resolvedIP}${c.reset}`);
+      console.log(`  ${c.white}  Expected:       → ${c.green}${c.bold}${serverIP}${c.reset}`);
+      console.log();
+      console.log(`  ${c.yellow}Certbot will fail unless the domain points to this server.${c.reset}`);
+      console.log();
+      console.log(`  ${c.cyan}${c.bold}1)${c.reset} Try anyway (maybe the IP is correct and detection is wrong)`);
+      console.log(`  ${c.cyan}${c.bold}2)${c.reset} Enter a different domain`);
+      console.log(`  ${c.cyan}${c.bold}3)${c.reset} Skip SSL for now`);
+      const ipChoice = await ask(rl, `\n  ${c.cyan}Choose (1-3): ${c.reset}`);
+      if (ipChoice === '2') {
+        const newDomain = await ask(rl, `  ${c.cyan}Enter the correct domain: ${c.reset}`);
+        if (newDomain && newDomain.includes('.') && newDomain.length >= 3) {
+          currentDomain = newDomain.trim();
+          if (webserver === 'nginx') { createNginxConfig(currentDomain); }
+          else if (webserver === 'apache2') { createApacheConfig(currentDomain); }
+          else if (webserver === 'caddy') { createCaddyConfig(currentDomain); }
+          console.log(`\n  ${icon.check} ${c.green}Domain changed to ${c.bold}${currentDomain}${c.reset}`);
+        } else {
+          console.log(`  ${c.yellow}Invalid domain — keeping ${currentDomain}${c.reset}`);
+        }
+        continue;
+      } else if (ipChoice === '3') {
+        console.log(`\n  ${c.yellow}SSL skipped. Use ${c.bold}"Health Check & Repair"${c.reset}${c.yellow} from the TOOLS menu when ready.${c.reset}`);
+        break;
+      }
+      // ipChoice === '1' → fall through to certbot attempt
+    } else {
+      console.log(`  ${icon.check} ${c.green}DNS resolves to ${serverIP} — correct!${c.reset}`);
+    }
+
+    // Attempt certbot
     console.log(`\n  ${c.cyan}Running Certbot to obtain SSL certificate...${c.reset}\n`);
     try {
       if (webserver === 'nginx') {
-        execSync(`certbot --nginx -d ${domain} -d www.${domain} --non-interactive --agree-tos --redirect --register-unsafely-without-email`, NO_STDIN);
+        execSync(`certbot --nginx -d ${currentDomain} -d www.${currentDomain} --non-interactive --agree-tos --redirect --register-unsafely-without-email`, NO_STDIN);
       } else if (webserver === 'apache2') {
-        execSync(`certbot --apache -d ${domain} -d www.${domain} --non-interactive --agree-tos --redirect --register-unsafely-without-email`, NO_STDIN);
+        execSync(`certbot --apache -d ${currentDomain} -d www.${currentDomain} --non-interactive --agree-tos --redirect --register-unsafely-without-email`, NO_STDIN);
       } else {
-        console.log(`  ${c.dim}Caddy handles SSL automatically. Skipping certbot.${c.reset}`);
+        console.log(`  ${c.dim}Caddy handles SSL automatically.${c.reset}`);
       }
-      console.log(`\n  ${icon.check} ${c.green}${c.bold}SSL certificate obtained! ${domain} is now secured with HTTPS.${c.reset}`);
+      console.log(`\n  ${icon.check} ${c.green}${c.bold}SSL certificate obtained! ${currentDomain} is now secured with HTTPS.${c.reset}`);
+      sslDone = true;
     } catch {
-      console.log(`\n  ${icon.x} ${c.red}Certbot failed. You can retry later with:${c.reset}`);
-      if (webserver === 'nginx') {
-        console.log(`  ${c.white}  sudo certbot --nginx -d ${domain} -d www.${domain}${c.reset}`);
+      console.log(`\n  ${icon.x} ${c.red}${c.bold}Certbot failed to obtain SSL certificate.${c.reset}`);
+      console.log();
+      console.log(`  ${c.yellow}${c.bold}This usually means:${c.reset}`);
+      console.log(`  ${c.white}  • DNS hasn't fully propagated yet (wait a few minutes)${c.reset}`);
+      console.log(`  ${c.white}  • The domain points to the wrong server${c.reset}`);
+      console.log(`  ${c.white}  • Port 80 is blocked by a firewall${c.reset}`);
+      console.log(`  ${c.white}  • Rate limit hit (too many requests to Let's Encrypt for this domain)${c.reset}`);
+      console.log();
+      console.log(`  ${c.cyan}${c.bold}1)${c.reset} Retry SSL with same domain (${currentDomain})`);
+      console.log(`  ${c.cyan}${c.bold}2)${c.reset} Enter a different domain`);
+      console.log(`  ${c.cyan}${c.bold}3)${c.reset} Skip SSL for now (fix later with Health Check & Repair)`);
+      const failChoice = await ask(rl, `\n  ${c.cyan}Choose (1-3): ${c.reset}`);
+      if (failChoice === '2') {
+        const newDomain = await ask(rl, `  ${c.cyan}Enter the correct domain: ${c.reset}`);
+        if (newDomain && newDomain.includes('.') && newDomain.length >= 3) {
+          currentDomain = newDomain.trim();
+          if (webserver === 'nginx') { createNginxConfig(currentDomain); }
+          else if (webserver === 'apache2') { createApacheConfig(currentDomain); }
+          else if (webserver === 'caddy') { createCaddyConfig(currentDomain); }
+          console.log(`\n  ${icon.check} ${c.green}Domain changed to ${c.bold}${currentDomain}${c.reset}`);
+        } else {
+          console.log(`  ${c.yellow}Invalid domain — keeping ${currentDomain}${c.reset}`);
+        }
+        continue;
+      } else if (failChoice === '3') {
+        console.log(`\n  ${c.yellow}SSL skipped. Use ${c.bold}"Health Check & Repair"${c.reset}${c.yellow} from the TOOLS menu to retry.${c.reset}`);
+        break;
+      }
+      // failChoice === '1' or anything else → loop retries
+      continue;
+    }
+  }
+
+  return currentDomain;
+}
+
+// ── OpenClaw Health Check & Repair ──────────────
+async function repairOpenClaw(rl) {
+  clearScreen();
+  printHeader();
+  console.log(`${c.bgYellow}${c.black}${c.bold}                                                ${c.reset}`);
+  console.log(`${c.bgYellow}${c.black}${c.bold}   🩺 OpenClaw Health Check & Repair             ${c.reset}`);
+  console.log(`${c.bgYellow}${c.black}${c.bold}                                                ${c.reset}`);
+  console.log();
+
+  let realUser;
+  try { realUser = execSync('logname 2>/dev/null || echo root', { encoding: 'utf-8' }).trim(); } catch { realUser = 'root'; }
+  const homeDir = realUser === 'root' ? '/root' : `/home/${realUser}`;
+  const portalDest = '/opt/openclaw-portal';
+  const clawCfg = `${homeDir}/.openclaw/openclaw.json`;
+
+  function fileExists(p) { try { execSync(`test -f ${p}`, { stdio: 'pipe' }); return true; } catch { return false; } }
+  function dirExists(p) { try { execSync(`test -d ${p}`, { stdio: 'pipe' }); return true; } catch { return false; } }
+
+  let issuesFound = 0;
+  let issuesFixed = 0;
+
+  // ── Detect domain from nginx sites ────────────
+  let domain = null;
+  try {
+    const sites = execSync('ls /etc/nginx/sites-available/ 2>/dev/null', { encoding: 'utf-8' }).trim();
+    const candidates = sites.split('\n').filter(s => s !== 'default' && s.length > 0);
+    if (candidates.length > 0) domain = candidates[0];
+  } catch { /* no nginx */ }
+
+  let webserver = null;
+  if (isInstalled('nginx')) webserver = 'nginx';
+  else if (isInstalled('apache2')) webserver = 'apache2';
+  else if (isInstalled('caddy')) webserver = 'caddy';
+
+  console.log(`  ${c.cyan}${c.bold}Running health checks...${c.reset}\n`);
+
+  // ── 1. PostgreSQL running ─────────────────────
+  process.stdout.write(`  ${c.dim}[1/10]${c.reset} PostgreSQL ... `);
+  try {
+    const pgStatus = execSync('systemctl is-active postgresql 2>/dev/null', { encoding: 'utf-8' }).trim();
+    if (pgStatus === 'active') {
+      console.log(`${icon.check} ${c.green}running${c.reset}`);
+    } else {
+      throw new Error('not active');
+    }
+  } catch {
+    issuesFound++;
+    console.log(`${icon.x} ${c.red}not running — restarting...${c.reset}`);
+    try {
+      execSync('systemctl enable postgresql && systemctl start postgresql', { stdio: 'pipe' });
+      console.log(`       ${icon.check} ${c.green}PostgreSQL started${c.reset}`);
+      issuesFixed++;
+    } catch {
+      console.log(`       ${icon.x} ${c.red}Failed to start PostgreSQL. Check: systemctl status postgresql${c.reset}`);
+    }
+  }
+
+  // ── 2. OpenClaw gateway service ───────────────
+  process.stdout.write(`  ${c.dim}[2/10]${c.reset} OpenClaw gateway service ... `);
+  const gatewayServiceExists = fileExists('/etc/systemd/system/openclaw-gateway.service');
+  if (gatewayServiceExists) {
+    try {
+      const gwStatus = execSync('systemctl is-active openclaw-gateway 2>/dev/null', { encoding: 'utf-8' }).trim();
+      if (gwStatus === 'active') {
+        console.log(`${icon.check} ${c.green}running${c.reset}`);
       } else {
-        console.log(`  ${c.white}  sudo certbot --apache -d ${domain} -d www.${domain}${c.reset}`);
+        throw new Error('not active');
+      }
+    } catch {
+      issuesFound++;
+      console.log(`${icon.x} ${c.red}not running — restarting...${c.reset}`);
+      try {
+        execSync('systemctl restart openclaw-gateway', { stdio: 'pipe' });
+        console.log(`       ${icon.check} ${c.green}Gateway restarted${c.reset}`);
+        issuesFixed++;
+      } catch {
+        console.log(`       ${icon.x} ${c.red}Failed. Check: systemctl status openclaw-gateway${c.reset}`);
       }
     }
   } else {
-    console.log(`\n  ${c.yellow}No problem! After DNS propagates, run certbot manually:${c.reset}`);
-    if (webserver === 'nginx') {
-      console.log(`  ${c.white}  sudo certbot --nginx -d ${domain} -d www.${domain}${c.reset}`);
-    } else if (webserver === 'apache2') {
-      console.log(`  ${c.white}  sudo certbot --apache -d ${domain} -d www.${domain}${c.reset}`);
-    } else {
-      console.log(`  ${c.dim}  Caddy will handle SSL automatically once DNS resolves.${c.reset}`);
+    issuesFound++;
+    console.log(`${icon.x} ${c.yellow}no systemd service — creating one...${c.reset}`);
+    try {
+      const openclawBin = execSync('which openclaw', { encoding: 'utf-8' }).trim();
+      if (openclawBin) {
+        const serviceUnit = [
+          '[Unit]', 'Description=OpenClaw Gateway', 'After=network.target postgresql.service', 'Wants=network.target', '',
+          '[Service]', 'Type=simple', `User=${realUser}`, `Group=${realUser}`, `WorkingDirectory=${homeDir}`,
+          `ExecStart=${openclawBin} gateway --port 18789`, 'Restart=on-failure', 'RestartSec=5',
+          `Environment=HOME=${homeDir}`, 'Environment=NODE_ENV=production', '',
+          '[Install]', 'WantedBy=multi-user.target',
+        ].join('\\n');
+        execSync(`printf '${serviceUnit}' > /etc/systemd/system/openclaw-gateway.service`, { stdio: 'pipe' });
+        execSync('systemctl daemon-reload && systemctl enable openclaw-gateway && systemctl start openclaw-gateway', { stdio: 'pipe' });
+        console.log(`       ${icon.check} ${c.green}Gateway service created & started${c.reset}`);
+        issuesFixed++;
+      }
+    } catch {
+      console.log(`       ${icon.x} ${c.red}Could not create service. Is OpenClaw installed?${c.reset}`);
     }
   }
 
-  return domain;
-}
-
-// ── Configure domain for existing OpenClaw install ─
-async function configureOpenClawDomain(rl) {
-  clearScreen();
-  printHeader();
-  console.log(`${c.bgMagenta}${c.white}${c.bold}                                                ${c.reset}`);
-  console.log(`${c.bgMagenta}${c.white}${c.bold}   🌐 Add Domain to OpenClaw                    ${c.reset}`);
-  console.log(`${c.bgMagenta}${c.white}${c.bold}                                                ${c.reset}`);
-  console.log();
-
-  const domain = await setupOpenClawDomain(rl);
-  if (!domain) {
-    console.log(`\n  ${c.yellow}No domain entered. Returning to menu.${c.reset}`);
-    await ask(rl, `\n  ${c.dim}Press Enter to continue...${c.reset}`);
-    return;
+  // ── 3. Portal running on port 3000 ────────────
+  process.stdout.write(`  ${c.dim}[3/10]${c.reset} Portal (port 3000) ... `);
+  try {
+    const portalPid = execSync('lsof -ti:3000 2>/dev/null || echo ""', { encoding: 'utf-8' }).trim();
+    if (portalPid) {
+      console.log(`${icon.check} ${c.green}running (PID ${portalPid.split('\n')[0]})${c.reset}`);
+    } else {
+      throw new Error('not listening');
+    }
+  } catch {
+    issuesFound++;
+    console.log(`${icon.x} ${c.red}not running — starting...${c.reset}`);
+    try {
+      execSync('/usr/local/bin/portal-ctl start', { stdio: 'pipe' });
+      console.log(`       ${icon.check} ${c.green}Portal started${c.reset}`);
+      issuesFixed++;
+    } catch {
+      console.log(`       ${icon.x} ${c.red}Failed. Check: portal-ctl start${c.reset}`);
+    }
   }
 
-  // Close direct port 3000 since domain handles traffic via 443
-  try {
-    execSync('ufw delete allow 3000/tcp 2>/dev/null', { stdio: 'pipe' });
-    console.log(`\n  ${icon.check} ${c.green}Closed port 3000 — traffic now routes through ${domain} (HTTPS).${c.reset}`);
-  } catch { /* may not have been open */ }
+  // ── 4. OpenClaw config (allowedOrigins + cleanup) ──
+  process.stdout.write(`  ${c.dim}[4/10]${c.reset} OpenClaw config ... `);
+  if (fileExists(clawCfg)) {
+    try {
+      const raw = execSync(`cat ${clawCfg}`, { encoding: 'utf-8' });
+      const cfg = JSON.parse(raw);
+      let changed = false;
 
-  // Restart portal to pick up any env changes
-  try {
-    execSync('/usr/local/bin/portal-ctl start', { stdio: 'pipe' });
-    console.log(`  ${icon.check} ${c.green}Portal restarted${c.reset}`);
-  } catch { /* non-critical */ }
+      if (!cfg.gateway) cfg.gateway = {};
 
-  console.log(`\n  ${c.dim}Traffic: User → ${domain} (443) → Portal (3000) → OpenClaw (18789)${c.reset}`);
-  console.log(`\n  ${icon.rocket} ${c.green}${c.bold}OpenClaw is live at: https://${domain}${c.reset}`);
+      // Remove invalid trustedProxies key if it exists (not in OpenClaw schema — causes crash)
+      if (cfg.gateway.trustedProxies) {
+        delete cfg.gateway.trustedProxies;
+        changed = true;
+      }
+
+      // allowedOrigins — required for reverse-proxied Control UI
+      if (domain) {
+        if (!cfg.gateway.controlUi) cfg.gateway.controlUi = {};
+        if (!cfg.gateway.controlUi.allowedOrigins) cfg.gateway.controlUi.allowedOrigins = [];
+        const origins = [`https://${domain}`, `https://www.${domain}`];
+        for (const origin of origins) {
+          if (!cfg.gateway.controlUi.allowedOrigins.includes(origin)) {
+            cfg.gateway.controlUi.allowedOrigins.push(origin);
+            changed = true;
+          }
+        }
+      }
+
+      if (changed) {
+        issuesFound++;
+        execSync(`echo '${JSON.stringify(cfg, null, 2).replace(/'/g, "'\\''")}' > ${clawCfg}`, { stdio: 'pipe' });
+        console.log(`${icon.x} ${c.yellow}missing entries — fixed${c.reset}`);
+        if (domain) console.log(`       ${icon.check} ${c.green}Added: allowedOrigins for ${domain}${c.reset}`);
+        // Restart gateway to pick up config
+        try { execSync('systemctl restart openclaw-gateway', { stdio: 'pipe' }); } catch { /* */ }
+        issuesFixed++;
+      } else {
+        console.log(`${icon.check} ${c.green}allowedOrigins OK${c.reset}`);
+      }
+    } catch (err) {
+      console.log(`${icon.x} ${c.red}could not parse: ${err.message}${c.reset}`);
+    }
+  } else {
+    issuesFound++;
+    console.log(`${icon.x} ${c.red}config not found at ${clawCfg}${c.reset}`);
+    console.log(`       ${c.yellow}Run: openclaw setup${c.reset}`);
+  }
+
+  // ── 5. Portal .env + OPENCLAW_TOKEN ───────────
+  process.stdout.write(`  ${c.dim}[5/10]${c.reset} Portal .env ... `);
+  if (fileExists(`${portalDest}/.env`)) {
+    try {
+      const envContent = execSync(`cat ${portalDest}/.env`, { encoding: 'utf-8' });
+      const hasToken = /^OPENCLAW_TOKEN=.+/m.test(envContent);
+      const hasSecret = /^SESSION_SECRET=.+/m.test(envContent);
+      const hasDbUrl = /^DATABASE_URL=.+/m.test(envContent);
+      const problems = [];
+      if (!hasToken) problems.push('OPENCLAW_TOKEN');
+      if (!hasSecret) problems.push('SESSION_SECRET');
+      if (!hasDbUrl) problems.push('DATABASE_URL');
+
+      if (problems.length > 0) {
+        issuesFound++;
+        console.log(`${icon.x} ${c.yellow}missing: ${problems.join(', ')}${c.reset}`);
+
+        // Auto-fix token from OpenClaw config
+        if (!hasToken && fileExists(clawCfg)) {
+          try {
+            const raw = execSync(`cat ${clawCfg}`, { encoding: 'utf-8' });
+            const cfg = JSON.parse(raw);
+            const token = cfg.gateway?.auth?.token || '';
+            if (token) {
+              execSync(`echo 'OPENCLAW_TOKEN=${token}' >> ${portalDest}/.env`, { stdio: 'pipe' });
+              console.log(`       ${icon.check} ${c.green}OPENCLAW_TOKEN added from gateway config${c.reset}`);
+              issuesFixed++;
+            } else {
+              console.log(`       ${c.yellow}Add token manually: echo 'OPENCLAW_TOKEN=<your-token>' >> ${portalDest}/.env${c.reset}`);
+            }
+          } catch { /* */ }
+        }
+        if (!hasSecret) {
+          try {
+            const secret = execSync('openssl rand -hex 32', { encoding: 'utf-8' }).trim();
+            execSync(`echo 'SESSION_SECRET=${secret}' >> ${portalDest}/.env`, { stdio: 'pipe' });
+            console.log(`       ${icon.check} ${c.green}SESSION_SECRET generated${c.reset}`);
+            issuesFixed++;
+          } catch { /* */ }
+        }
+      } else {
+        console.log(`${icon.check} ${c.green}all keys present${c.reset}`);
+      }
+    } catch {
+      console.log(`${icon.x} ${c.red}could not read .env${c.reset}`);
+    }
+  } else {
+    issuesFound++;
+    console.log(`${icon.x} ${c.red}missing — re-run OpenClaw setup to create it${c.reset}`);
+  }
+
+  // ── 6. Domain setup / change ──────────────────
+  process.stdout.write(`  ${c.dim}[6/10]${c.reset} Domain ... `);
+  if (domain) {
+    console.log(`${icon.check} ${c.green}${domain} detected${c.reset}`);
+    const changeDomain = await ask(rl, `         ${c.dim}Change domain? (y/N): ${c.reset}`);
+    if (changeDomain.toLowerCase() === 'y') {
+      const newDomain = await setupOpenClawDomain(rl);
+      if (newDomain) {
+        domain = newDomain;
+        // Close direct port 3000 — traffic routes through HTTPS
+        try { execSync('ufw delete allow 3000/tcp 2>/dev/null', { stdio: 'pipe' }); } catch { /* */ }
+        // Update allowedOrigins
+        try {
+          const raw = execSync(`cat ${clawCfg}`, { encoding: 'utf-8' });
+          const cfg = JSON.parse(raw);
+          if (!cfg.gateway) cfg.gateway = {};
+          if (!cfg.gateway.controlUi) cfg.gateway.controlUi = {};
+          if (!cfg.gateway.controlUi.allowedOrigins) cfg.gateway.controlUi.allowedOrigins = [];
+          const origins = [`https://${domain}`, `https://www.${domain}`];
+          let changed = false;
+          for (const origin of origins) {
+            if (!cfg.gateway.controlUi.allowedOrigins.includes(origin)) {
+              cfg.gateway.controlUi.allowedOrigins.push(origin);
+              changed = true;
+            }
+          }
+          if (changed) {
+            execSync(`echo '${JSON.stringify(cfg, null, 2).replace(/'/g, "'\\''")}' > ${clawCfg}`, { stdio: 'pipe' });
+            try { execSync('systemctl restart openclaw-gateway', NO_STDIN); } catch { /* */ }
+          }
+        } catch { /* */ }
+        // Restart portal
+        try { execSync('/usr/local/bin/portal-ctl start', { stdio: 'pipe' }); } catch { /* */ }
+        console.log(`  ${icon.check} ${c.green}Domain updated to ${domain}${c.reset}`);
+        // Re-detect webserver in case setupOpenClawDomain installed one
+        if (isInstalled('nginx')) webserver = 'nginx';
+        else if (isInstalled('apache2')) webserver = 'apache2';
+        else if (isInstalled('caddy')) webserver = 'caddy';
+      }
+    }
+  } else {
+    console.log(`${c.yellow}no domain configured${c.reset}`);
+    const setupDomain = await ask(rl, `         ${c.dim}Set up a domain now? (Y/n): ${c.reset}`);
+    if (setupDomain.toLowerCase() !== 'n') {
+      const newDomain = await setupOpenClawDomain(rl);
+      if (newDomain) {
+        domain = newDomain;
+        // Close direct port 3000 — traffic routes through HTTPS
+        try { execSync('ufw delete allow 3000/tcp 2>/dev/null', { stdio: 'pipe' }); } catch { /* */ }
+        // Update allowedOrigins
+        try {
+          const raw = execSync(`cat ${clawCfg}`, { encoding: 'utf-8' });
+          const cfg = JSON.parse(raw);
+          if (!cfg.gateway) cfg.gateway = {};
+          if (!cfg.gateway.controlUi) cfg.gateway.controlUi = {};
+          if (!cfg.gateway.controlUi.allowedOrigins) cfg.gateway.controlUi.allowedOrigins = [];
+          const origins = [`https://${domain}`, `https://www.${domain}`];
+          let changed = false;
+          for (const origin of origins) {
+            if (!cfg.gateway.controlUi.allowedOrigins.includes(origin)) {
+              cfg.gateway.controlUi.allowedOrigins.push(origin);
+              changed = true;
+            }
+          }
+          if (changed) {
+            execSync(`echo '${JSON.stringify(cfg, null, 2).replace(/'/g, "'\\''")}' > ${clawCfg}`, { stdio: 'pipe' });
+            try { execSync('systemctl restart openclaw-gateway', NO_STDIN); } catch { /* */ }
+          }
+        } catch { /* */ }
+        // Restart portal
+        try { execSync('/usr/local/bin/portal-ctl start', { stdio: 'pipe' }); } catch { /* */ }
+        console.log(`  ${icon.check} ${c.green}Domain configured: ${domain}${c.reset}`);
+        // Re-detect webserver in case setupOpenClawDomain installed one
+        if (isInstalled('nginx')) webserver = 'nginx';
+        else if (isInstalled('apache2')) webserver = 'apache2';
+        else if (isInstalled('caddy')) webserver = 'caddy';
+      }
+    }
+  }
+
+  // ── 7. Nginx / web server config ──────────────
+  process.stdout.write(`  ${c.dim}[7/10]${c.reset} Web server config ... `);
+  if (domain && webserver === 'nginx') {
+    const confPath = `/etc/nginx/sites-available/${domain}`;
+    if (fileExists(confPath)) {
+      try {
+        const conf = execSync(`cat ${confPath}`, { encoding: 'utf-8' });
+        const hasProxy = conf.includes('proxy_pass');
+        const hasSSL = conf.includes('ssl') || conf.includes('443');
+        if (hasProxy && hasSSL) {
+          console.log(`${icon.check} ${c.green}${domain} — proxy_pass + SSL OK${c.reset}`);
+        } else if (hasProxy && !hasSSL) {
+          issuesFound++;
+          console.log(`${icon.x} ${c.yellow}proxy_pass OK but no SSL — certbot may have failed${c.reset}`);
+          console.log(`       ${c.dim}Will attempt SSL fix in check 8${c.reset}`);
+        } else {
+          issuesFound++;
+          console.log(`${icon.x} ${c.red}proxy_pass missing — config may be corrupt${c.reset}`);
+          console.log(`       ${c.yellow}Re-run this health check to set up the domain${c.reset}`);
+        }
+      } catch {
+        console.log(`${icon.x} ${c.red}could not read nginx config${c.reset}`);
+      }
+    } else {
+      issuesFound++;
+      console.log(`${icon.x} ${c.red}no config found for ${domain}${c.reset}`);
+      console.log(`       ${c.yellow}Re-run this health check and choose domain setup in check 6${c.reset}`);
+    }
+  } else if (domain && webserver === 'apache2') {
+    const confPath = `/etc/apache2/sites-available/${domain}.conf`;
+    if (fileExists(confPath)) {
+      console.log(`${icon.check} ${c.green}Apache config exists for ${domain}${c.reset}`);
+    } else {
+      issuesFound++;
+      console.log(`${icon.x} ${c.red}no config found for ${domain}${c.reset}`);
+    }
+  } else if (!domain) {
+    console.log(`${c.dim}no domain configured — skipped${c.reset}`);
+  } else {
+    console.log(`${icon.check} ${c.green}${webserver || 'no web server'} detected${c.reset}`);
+  }
+
+  // ── 8. SSL certificate check & retry ──────────
+  process.stdout.write(`  ${c.dim}[8/10]${c.reset} SSL certificate ... `);
+  if (domain && webserver && webserver !== 'caddy') {
+    let sslValid = false;
+    try {
+      const certCheck = execSync(`certbot certificates --domain ${domain} 2>/dev/null`, { encoding: 'utf-8' });
+      sslValid = certCheck.includes('Certificate Name') && !certCheck.includes('INVALID');
+      if (sslValid) {
+        // Check expiry
+        const expiryMatch = certCheck.match(/Expiry Date: ([^\n]+)/);
+        if (expiryMatch) {
+          const expiry = new Date(expiryMatch[1].trim().split(' (')[0]);
+          const daysLeft = Math.floor((expiry - new Date()) / 86400000);
+          if (daysLeft < 7) {
+            console.log(`${c.yellow}expires in ${daysLeft} days — renewing...${c.reset}`);
+            try {
+              execSync('certbot renew --force-renewal', NO_STDIN);
+              console.log(`       ${icon.check} ${c.green}Certificate renewed${c.reset}`);
+              issuesFixed++;
+            } catch {
+              console.log(`       ${icon.x} ${c.red}Renewal failed. Try: sudo certbot renew --force-renewal${c.reset}`);
+            }
+          } else {
+            console.log(`${icon.check} ${c.green}valid (${daysLeft} days remaining)${c.reset}`);
+          }
+        } else {
+          console.log(`${icon.check} ${c.green}certificate found${c.reset}`);
+        }
+      } else {
+        throw new Error('no valid cert');
+      }
+    } catch {
+      issuesFound++;
+      console.log(`${icon.x} ${c.yellow}not found or invalid${c.reset}`);
+
+      // Get server IP for display
+      let serverIP = 'YOUR_SERVER_IP';
+      try { serverIP = execSync("hostname -I | awk '{print $1}'", { encoding: 'utf-8' }).trim(); } catch { /* */ }
+
+      // Interactive SSL repair loop
+      let sslRetrying = true;
+      while (sslRetrying) {
+        // Check DNS
+        let resolvedIP = '';
+        try { resolvedIP = execSync(`dig +short ${domain} 2>/dev/null | head -1`, { encoding: 'utf-8' }).trim(); } catch { /* */ }
+        if (!resolvedIP) {
+          try { resolvedIP = execSync(`host ${domain} 2>/dev/null | grep 'has address' | head -1 | awk '{print $NF}'`, { encoding: 'utf-8' }).trim(); } catch { /* */ }
+        }
+
+        if (!resolvedIP) {
+          console.log(`\n       ${icon.x} ${c.red}DNS is NOT resolving for ${domain}${c.reset}`);
+          console.log(`       ${c.white}Your DNS records should look like this:${c.reset}`);
+          console.log(`       ${c.cyan}  Type   Name              Value${c.reset}`);
+          console.log(`       ${c.white}  ─────  ────────────────  ─────────────────${c.reset}`);
+          console.log(`       ${c.green}  A      ${domain.padEnd(16)}  ${serverIP}${c.reset}`);
+          console.log(`       ${c.green}  A      www.${(domain.length > 12 ? domain.substring(0, 12) + '…' : domain).padEnd(12)}  ${serverIP}${c.reset}`);
+          console.log();
+          console.log(`       ${c.cyan}${c.bold}1)${c.reset} Retry (after fixing DNS)`);
+          console.log(`       ${c.cyan}${c.bold}2)${c.reset} Skip SSL for now`);
+          const dnsChoice = await ask(rl, `       ${c.cyan}Choose (1-2): ${c.reset}`);
+          if (dnsChoice === '2') { sslRetrying = false; break; }
+          continue;
+        }
+
+        if (resolvedIP !== serverIP) {
+          console.log(`\n       ${c.yellow}⚠  DNS resolves to ${c.red}${resolvedIP}${c.reset}${c.yellow}, expected ${c.green}${serverIP}${c.reset}`);
+          console.log(`       ${c.cyan}${c.bold}1)${c.reset} Try anyway`);
+          console.log(`       ${c.cyan}${c.bold}2)${c.reset} Skip SSL for now`);
+          const ipChoice = await ask(rl, `       ${c.cyan}Choose (1-2): ${c.reset}`);
+          if (ipChoice === '2') { sslRetrying = false; break; }
+        } else {
+          console.log(`       ${icon.check} ${c.green}DNS resolves to ${serverIP}${c.reset}`);
+        }
+
+        // Attempt certbot
+        console.log(`       ${c.cyan}Running Certbot...${c.reset}`);
+        try {
+          if (webserver === 'nginx') {
+            execSync(`certbot --nginx -d ${domain} -d www.${domain} --non-interactive --agree-tos --redirect --register-unsafely-without-email`, NO_STDIN);
+          } else {
+            execSync(`certbot --apache -d ${domain} -d www.${domain} --non-interactive --agree-tos --redirect --register-unsafely-without-email`, NO_STDIN);
+          }
+          console.log(`       ${icon.check} ${c.green}${c.bold}SSL certificate obtained!${c.reset}`);
+          issuesFixed++;
+          sslRetrying = false;
+        } catch {
+          console.log(`       ${icon.x} ${c.red}Certbot failed.${c.reset}`);
+          console.log(`       ${c.yellow}Common causes: DNS not propagated, port 80 blocked, rate limit.${c.reset}`);
+          console.log();
+          console.log(`       ${c.cyan}${c.bold}1)${c.reset} Retry`);
+          console.log(`       ${c.cyan}${c.bold}2)${c.reset} Skip SSL for now`);
+          const retryChoice = await ask(rl, `       ${c.cyan}Choose (1-2): ${c.reset}`);
+          if (retryChoice === '2') { sslRetrying = false; }
+        }
+      }
+    }
+  } else if (webserver === 'caddy') {
+    console.log(`${icon.check} ${c.green}Caddy handles SSL automatically${c.reset}`);
+  } else {
+    console.log(`${c.dim}no domain or web server — skipped${c.reset}`);
+  }
+
+  // ── 9. portal-ctl + cron ──────────────────────
+  process.stdout.write(`  ${c.dim}[9/10]${c.reset} portal-ctl & cron ... `);
+  const portalCtlOk = fileExists('/usr/local/bin/portal-ctl');
+  let cronOk = false;
+  try {
+    const cron = execSync('crontab -l 2>/dev/null', { encoding: 'utf-8' });
+    cronOk = cron.includes('portal-ctl health');
+  } catch { /* no crontab */ }
+
+  if (portalCtlOk && cronOk) {
+    console.log(`${icon.check} ${c.green}installed + cron job active${c.reset}`);
+  } else {
+    issuesFound++;
+    if (!portalCtlOk) {
+      try {
+        execSync(`cp ${portalDest}/portal-ctl.sh /usr/local/bin/portal-ctl && chmod +x /usr/local/bin/portal-ctl`, { stdio: 'pipe' });
+        console.log(`${icon.x} ${c.yellow}portal-ctl missing — installed${c.reset}`);
+        issuesFixed++;
+      } catch {
+        console.log(`${icon.x} ${c.red}portal-ctl missing & could not install${c.reset}`);
+      }
+    }
+    if (!cronOk) {
+      try {
+        let existing = '';
+        try { existing = execSync('crontab -l 2>/dev/null', { encoding: 'utf-8' }); } catch { /* */ }
+        const newCron = existing.trimEnd() + '\n0 * * * * /usr/local/bin/portal-ctl health\n';
+        execSync(`echo '${newCron.replace(/'/g, "'\\''")}' | crontab -`, { stdio: 'pipe' });
+        if (portalCtlOk) console.log(`${icon.x} ${c.yellow}cron missing — installed${c.reset}`);
+        else console.log(`       ${icon.x} ${c.yellow}cron missing — installed${c.reset}`);
+        issuesFixed++;
+      } catch {
+        console.log(`       ${icon.x} ${c.red}Could not install cron job${c.reset}`);
+      }
+    }
+  }
+
+  // ── 10. Shell aliases ─────────────────────────
+  process.stdout.write(`  ${c.dim}[10/10]${c.reset} Shell aliases ... `);
+  const bashrcPaths = [`${homeDir}/.bashrc`, '/root/.bashrc'];
+  let aliasesFixed = false;
+  for (const rc of bashrcPaths) {
+    try {
+      const content = execSync(`cat ${rc} 2>/dev/null || echo ""`, { encoding: 'utf-8' });
+      if (!content.includes('portal-start')) {
+        if (!aliasesFixed) { issuesFound++; aliasesFixed = true; }
+        const aliasBlock = [
+          '', '# OpenClaw Portal aliases',
+          "alias portal-start='sudo portal-ctl start'",
+          "alias portal-stop='sudo portal-ctl stop'",
+          "alias portal-status='sudo portal-ctl status'",
+        ].join('\n');
+        execSync(`echo '${aliasBlock}' >> ${rc}`, { stdio: 'pipe' });
+      }
+    } catch { /* non-critical */ }
+  }
+  if (aliasesFixed) {
+    console.log(`${icon.x} ${c.yellow}missing — added to .bashrc${c.reset}`);
+    issuesFixed++;
+  } else {
+    console.log(`${icon.check} ${c.green}portal-start, portal-stop, portal-status OK${c.reset}`);
+  }
+
+  // ── Summary ───────────────────────────────────
+  console.log();
+  console.log(`${c.bold}  ────────────────────────────────────────────${c.reset}`);
+  if (issuesFound === 0) {
+    console.log(`\n  ${icon.check} ${c.green}${c.bold}All checks passed — OpenClaw is healthy!${c.reset}`);
+  } else if (issuesFixed === issuesFound) {
+    console.log(`\n  ${icon.check} ${c.green}${c.bold}Found ${issuesFound} issue(s) — all fixed automatically.${c.reset}`);
+  } else {
+    const remaining = issuesFound - issuesFixed;
+    console.log(`\n  ${c.yellow}${c.bold}Found ${issuesFound} issue(s): ${issuesFixed} fixed, ${remaining} need manual attention.${c.reset}`);
+  }
+
+  if (domain) {
+    console.log(`\n  ${c.dim}Traffic: User → ${domain} (443) → Portal (3000) → OpenClaw (18789)${c.reset}`);
+  }
 
   await ask(rl, `\n  ${c.dim}Press Enter to continue...${c.reset}`);
 }
@@ -1144,21 +1758,35 @@ async function setupOpenClaw(rl) {
     }
   }
 
-  // Also set trustedProxies so OpenClaw accepts requests from our reverse proxy
+  // Set controlUi.allowedOrigins so OpenClaw accepts Control UI requests from our reverse proxy
   if (isInstalled('openclaw') && fileExists(clawCfg)) {
     try {
       const raw = execSync(`cat ${clawCfg}`, { encoding: 'utf-8' });
       const cfg = JSON.parse(raw);
       let changed = false;
       if (!cfg.gateway) cfg.gateway = {};
-      if (!cfg.gateway.trustedProxies) cfg.gateway.trustedProxies = [];
-      if (!cfg.gateway.trustedProxies.includes('127.0.0.1')) {
-        cfg.gateway.trustedProxies.push('127.0.0.1');
+
+      // Remove invalid trustedProxies if it was set by an older installer version
+      if (cfg.gateway.trustedProxies) {
+        delete cfg.gateway.trustedProxies;
         changed = true;
+      }
+
+      // Allow the domain origin in the control UI
+      if (domain) {
+        if (!cfg.gateway.controlUi) cfg.gateway.controlUi = {};
+        if (!cfg.gateway.controlUi.allowedOrigins) cfg.gateway.controlUi.allowedOrigins = [];
+        const origins = [`https://${domain}`, `https://www.${domain}`];
+        for (const origin of origins) {
+          if (!cfg.gateway.controlUi.allowedOrigins.includes(origin)) {
+            cfg.gateway.controlUi.allowedOrigins.push(origin);
+            changed = true;
+          }
+        }
       }
       if (changed) {
         execSync(`echo '${JSON.stringify(cfg, null, 2).replace(/'/g, "'\\''")}' > ${clawCfg}`, { stdio: 'pipe' });
-        console.log(`  ${icon.check} ${c.green}Trusted proxy 127.0.0.1 added to gateway config${c.reset}`);
+        if (domain) console.log(`  ${icon.check} ${c.green}Allowed origins set for ${domain}${c.reset}`);
       }
     } catch { /* non-critical */ }
   }
@@ -1552,8 +2180,8 @@ function showCategoryMenu(rl) {
     menuMap[i] = { type: 'tool', tool: 'generate-server-key' };
     i++;
     if (hasOpenClaw) {
-      console.log(`  ${c.cyan}${c.bold}${i})${c.reset} 🤖 Configure OpenClaw Domain  ${c.dim}Add or change the domain for your OpenClaw portal${c.reset}`);
-      menuMap[i] = { type: 'tool', tool: 'openclaw-domain' };
+      console.log(`  ${c.cyan}${c.bold}${i})${c.reset} � Health Check & Repair  ${c.dim}Diagnose & fix OpenClaw: domain, SSL, config & more${c.reset}`);
+      menuMap[i] = { type: 'tool', tool: 'repair-openclaw' };
       i++;
     }
   }
@@ -1711,8 +2339,6 @@ async function main() {
     } else if (selected.type === 'category') {
       const catKeys = Object.keys(packages).filter(k => packages[k].category === selected.category);
       await showPackageMenu(rl, selected.category, catKeys);
-    } else if (selected.type === 'tool' && selected.tool === 'openclaw-domain') {
-      await configureOpenClawDomain(rl);
     } else if (selected.type === 'tool' && selected.tool === 'git-ssh') {
       await setupGitSSH(rl);
       await ask(rl, `\n  ${c.dim}Press Enter to continue...${c.reset}`);
@@ -1722,6 +2348,8 @@ async function main() {
       await addSSHKey(rl);
     } else if (selected.type === 'tool' && selected.tool === 'generate-server-key') {
       await generateServerSSHKey(rl);
+    } else if (selected.type === 'tool' && selected.tool === 'repair-openclaw') {
+      await repairOpenClaw(rl);
     }
   }
 }

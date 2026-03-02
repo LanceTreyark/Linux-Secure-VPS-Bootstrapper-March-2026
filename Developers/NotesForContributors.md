@@ -137,7 +137,7 @@ installer.mjs
 ├── Post-install flows
 │   ├── setupGitSSH(rl)              — Git config + Ed25519 key generation
 │   ├── setupOpenClawDomain(rl)      — Domain/webserver/certbot setup (reusable)
-│   ├── configureOpenClawDomain(rl)  — After-the-fact domain addition
+│   ├── repairOpenClaw(rl)           — 10-check health + domain setup/change
 │   ├── setupOpenClaw(rl)            — Full OpenClaw + portal deployment
 │   ├── addWebsite(rl)               — Static site creation with landing page
 │   ├── addSSHKey(rl)                — Add public keys to authorized_keys
@@ -181,7 +181,7 @@ installer.mjs
 - **Git & SSH Key Setup** — visible when Git is installed. Configures Git globals and generates an Ed25519 SSH key for GitHub.
 - **Add SSH Key** — always visible. Adds public keys to `~/.ssh/authorized_keys` so other developers or agents can SSH into this server. Shows existing keys, validates format, deduplicates, and syncs keys to root.
 - **Generate Server SSH Key** — always visible. Generates an Ed25519 key pair on the server itself so it can SSH *out* to other servers (agent-to-agent access, automated deployments). Displays the public key with instructions for adding it to target servers.
-- **Configure OpenClaw Domain** — visible when OpenClaw is installed. Adds a domain to an existing OpenClaw setup using the same webserver/certbot/DNS flow.
+- **Health Check & Repair** — visible when OpenClaw is installed. Runs 10 diagnostic checks (`repairOpenClaw(rl)`) and auto-fixes what it can: PostgreSQL, gateway service, portal (port 3000), OpenClaw config (`controlUi.allowedOrigins` + invalid key cleanup), portal `.env` (token, secrets), domain setup/change (calls `setupOpenClawDomain`, closes port 3000, updates origins, restarts services), web server config, SSL certificate (retry certbot if DNS resolves), portal-ctl + cron, and shell aliases. Reports a summary of issues found/fixed. Replaces the old separate "Configure OpenClaw Domain" tool.
 
 **Key design decisions:**
 - Zero dependencies — uses only Node.js built-ins (`child_process`, `readline`)
@@ -467,7 +467,7 @@ User selects OpenClaw (AI Stack or individual)
         │       ├── Auto-read from ~/.openclaw/openclaw.json
         │       ├── If not found: prompt user to paste URL or raw token
         │       ├── Extract token from URL (#token=xxx) or use raw input
-        │       ├── Add 127.0.0.1 to gateway.trustedProxies in config
+        │       ├── Add domain origins to gateway.controlUi.allowedOrigins
         │       └── Save OPENCLAW_TOKEN to portal .env
         │
         └── 13. Create systemd service (openclaw-gateway.service)
