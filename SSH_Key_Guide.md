@@ -1,5 +1,7 @@
 # SSH Key Guide
 
+> Part of [Linux-Secure-VPS-Bootstrapper-March-2026](https://github.com/LanceTreyark/Linux-Secure-VPS-Bootstrapper-March-2026)
+
 How to generate SSH keys on your local machine so you can securely connect to your VPS (and GitHub).
 
 ---

@@ -1,5 +1,7 @@
 # Platform Installer Documentation
 
+> Part of [Linux-Secure-VPS-Bootstrapper-March-2026](https://github.com/LanceTreyark/Linux-Secure-VPS-Bootstrapper-March-2026)
+
 Interactive Node.js package manager for Linux VPS. Provides a color-coded terminal menu to install, remove, and manage server packages with preset stack bundles.
 
 ## Usage
@@ -181,6 +183,26 @@ When OpenClaw is installed (individually or via AI Stack), the installer runs a 
 
 If no domain is provided, it skips straight to starting the gateway.
 
+### Add a Website (TOOLS)
+
+When a web server is installed, the TOOLS section of the main menu shows an **"Add a Website"** option. This creates a complete static website with a landing page for any domain you own.
+
+**Flow:**
+
+1. **Domain prompt** — enter the domain name (e.g., `myblog.com`)
+2. **Web server detection** — uses installed Nginx, Apache2, or Caddy; if none installed, prompts to choose and install one
+3. **Web directory** — creates `/var/www/<domain>/public_html/` with the standard directory structure (see below)
+4. **Landing page** — deploys a dark-themed landing page (`index.html`) with the domain name, instructions, and a gradient design; skips if `index.html` already exists
+5. **Static config** — generates a file-serving web server configuration (no reverse proxy — just serves files from `public_html/`)
+6. **SSL** — installs Certbot + the correct plugin, shows required DNS records with auto-detected server IP, and runs Certbot when DNS is ready
+   - Caddy handles SSL automatically (no Certbot needed)
+
+After setup, edit the files at `/var/www/<domain>/public_html/` to build your site.
+
+> **Difference from OpenClaw configs:** The OpenClaw setup uses *reverse proxy* configs that route traffic to `127.0.0.1:3000` (the portal). The "Add a Website" feature uses *static file* configs that serve files directly from the web root with no proxy. Both use the same web directory structure.
+
+---
+
 ### Reverse Proxy Configs
 
 The installer creates a standard web directory structure and generates web server configs automatically:
@@ -216,6 +238,27 @@ The installer creates a standard web directory structure and generates web serve
 - Root: `/var/www/{domain}/public_html`
 - Blocks dotfile access with `respond @dotfiles 403`
 - Caddy handles SSL automatically (no certbot needed)
+
+### Static File Configs (Add a Website)
+
+The static configs serve files directly with no reverse proxy — used by the "Add a Website" tool.
+
+**Nginx** → `/etc/nginx/sites-available/{domain}`
+- Root: `/var/www/{domain}/public_html`
+- Serves `index.html` by default, falls back to `404`
+- Blocks all dotfiles (`location ~ /\.`)
+- Auto-symlinked to `sites-enabled/` and reloaded
+
+**Apache2** → `/etc/apache2/sites-available/{domain}.conf`
+- DocumentRoot: `/var/www/{domain}/public_html`
+- `AllowOverride All` for `.htaccess` support
+- Blocks dotfiles via `<FilesMatch>`
+- Auto-enabled with `a2ensite` and reloaded
+
+**Caddy** → appended to `/etc/caddy/Caddyfile`
+- Root: `/var/www/{domain}/public_html`
+- Serves files with `file_server`
+- Blocks dotfiles, auto-SSL
 
 ---
 

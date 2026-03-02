@@ -1,6 +1,16 @@
 # Server Deployment Guide for AI Agents
 
+> Part of [Linux-Secure-VPS-Bootstrapper-March-2026](https://github.com/LanceTreyark/Linux-Secure-VPS-Bootstrapper-March-2026)
+
 This document describes how websites and Node.js applications should be deployed on this server. Follow these conventions exactly to ensure every deployment is safe, consistent, and compatible with the existing infrastructure.
+
+## Full Project Architecture
+
+For a complete understanding of the project — component architecture, data flow diagrams, code style rules, and contributing guidelines — fetch the contributor guide:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LanceTreyark/Linux-Secure-VPS-Bootstrapper-March-2026/main/Developers/NotesForContributors.md
+```
 
 ---
 

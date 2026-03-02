@@ -1,5 +1,7 @@
 # Contributor Guide — Project Architecture
 
+> Part of [Linux-Secure-VPS-Bootstrapper-March-2026](https://github.com/LanceTreyark/Linux-Secure-VPS-Bootstrapper-March-2026)
+
 This document gives contributors a complete picture of the project's structure, architecture, and component relationships so you can understand the codebase and submit informed pull requests.
 
 ---
@@ -136,13 +138,17 @@ installer.mjs
 │   ├── setupGitSSH(rl)              — Git config + Ed25519 key generation
 │   ├── setupOpenClawDomain(rl)      — Domain/webserver/certbot setup (reusable)
 │   ├── configureOpenClawDomain(rl)  — After-the-fact domain addition
-│   └── setupOpenClaw(rl)            — Full OpenClaw + portal deployment
+│   ├── setupOpenClaw(rl)            — Full OpenClaw + portal deployment
+│   └── addWebsite(rl)               — Static site creation with landing page
 │
 ├── Web directory & config generators
-│   ├── createWebDirectory(domain)   — /var/www/<domain>/public_html + .env
-│   ├── createNginxConfig(domain)    — Reverse proxy + dotfile block
-│   ├── createApacheConfig(domain)   — ProxyPass + dotfile block
-│   └── createCaddyConfig(domain)    — Auto-SSL reverse proxy
+│   ├── createWebDirectory(domain)        — /var/www/<domain>/public_html + .env
+│   ├── createNginxConfig(domain)         — Reverse proxy + dotfile block (OpenClaw)
+│   ├── createApacheConfig(domain)        — ProxyPass + dotfile block (OpenClaw)
+│   ├── createCaddyConfig(domain)         — Auto-SSL reverse proxy (OpenClaw)
+│   ├── createStaticNginxConfig(domain)   — Static file serving + dotfile block
+│   ├── createStaticApacheConfig(domain)  — Static file serving + .htaccess support
+│   └── createStaticCaddyConfig(domain)   — Static file serving + auto-SSL
 │
 └── Menu system
     ├── showCategoryMenu(rl)    — Main menu (stacks, categories, tools)
@@ -168,7 +174,10 @@ installer.mjs
 - 🤖 AI: OpenClaw + Node.js + Git
 - 🔒 Security: Fail2ban + Auto Updates + Certbot
 
-**Contextual tools menu:** When OpenClaw is installed, a "Configure OpenClaw Domain" option appears in the main menu, allowing users to add a domain after initial setup using the same webserver/certbot/DNS flow.
+**Contextual tools menu (TOOLS section):** The main menu shows a TOOLS section with options that appear based on installed software:
+- **Add a Website** — visible when any web server is installed. Creates a static site: domain prompt → web dir → landing page → static file config → Certbot SSL. Uses `createStaticNginxConfig()` / `createStaticApacheConfig()` / `createStaticCaddyConfig()` (not the OpenClaw reverse proxy configs).
+- **Git & SSH Key Setup** — visible when Git is installed. Configures Git globals and generates an Ed25519 SSH key for GitHub.
+- **Configure OpenClaw Domain** — visible when OpenClaw is installed. Adds a domain to an existing OpenClaw setup using the same webserver/certbot/DNS flow.
 
 **Key design decisions:**
 - Zero dependencies — uses only Node.js built-ins (`child_process`, `readline`)
@@ -511,7 +520,7 @@ This project is designed to run on a live Debian 13 VPS. There is no test suite 
 | File                  | Approx. Lines | Purpose              |
 |-----------------------|---------------|----------------------|
 | `start.sh`           | ~200          | VPS bootstrap        |
-| `installer.mjs`      | ~1235         | Package manager      |
+| `installer.mjs`      | ~1539         | Package manager      |
 | `server.mjs`         | ~170          | Portal server        |
 | `db/setup.mjs`       | ~140          | DB schema setup      |
 | `portal-ctl.sh`      | ~85           | Process management   |

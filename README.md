@@ -70,6 +70,15 @@ ssh your_username@your_vps_ip
 
 After setup, type `platforms` to launch the interactive package manager. See [PlatformTools/PLATFORM_INSTALLER.md](PlatformTools/PLATFORM_INSTALLER.md) for full documentation.
 
+Features include:
+
+- **Preset stacks** — one-click bundles (Lance's Stack, Web Dev, LAMP, Docker, AI, Security)
+- **Individual packages** — browse by category (Web Servers, Databases, Runtimes, Dev Tools, AI, Security, Monitoring)
+- **TOOLS menu** — contextual utilities that appear based on what's installed:
+  - **Add a Website** — creates a static site with a landing page, web server config, and SSL (requires a web server)
+  - **Git & SSH Key Setup** — configures Git and generates an Ed25519 SSH key for GitHub (requires Git)
+  - **Configure OpenClaw Domain** — attach a domain to an existing OpenClaw installation (requires OpenClaw)
+
 ## Firewall Ports
 
 The following ports are opened by default:
