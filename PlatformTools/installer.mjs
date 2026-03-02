@@ -653,6 +653,185 @@ async function addWebsite(rl) {
   await ask(rl, `\n  ${c.dim}Press Enter to continue...${c.reset}`);
 }
 
+// ── Add SSH Key to authorized_keys ──────────────
+async function addSSHKey(rl) {
+  clearScreen();
+  printHeader();
+  console.log(`${c.bgMagenta}${c.white}${c.bold}                                                ${c.reset}`);
+  console.log(`${c.bgMagenta}${c.white}${c.bold}   🔐 Add SSH Key (Authorize Access)            ${c.reset}`);
+  console.log(`${c.bgMagenta}${c.white}${c.bold}                                                ${c.reset}`);
+  console.log();
+
+  // Get the real user
+  let realUser;
+  try {
+    realUser = execSync('logname 2>/dev/null || echo root', { encoding: 'utf-8' }).trim();
+  } catch { realUser = 'root'; }
+  const homeDir = realUser === 'root' ? '/root' : `/home/${realUser}`;
+  const authKeysPath = `${homeDir}/.ssh/authorized_keys`;
+
+  // Show current keys
+  let currentKeys = '';
+  try {
+    currentKeys = execSync(`cat ${authKeysPath} 2>/dev/null`, { encoding: 'utf-8' }).trim();
+  } catch { /* no file yet */ }
+
+  if (currentKeys) {
+    const keyCount = currentKeys.split('\n').filter(l => l.trim()).length;
+    console.log(`  ${c.green}${keyCount} key(s) currently authorized for ${c.bold}${realUser}${c.reset}`);
+    console.log();
+    for (const line of currentKeys.split('\n').filter(l => l.trim())) {
+      const parts = line.trim().split(' ');
+      const comment = parts.length >= 3 ? parts.slice(2).join(' ') : '(no comment)';
+      const type = parts[0] || 'unknown';
+      console.log(`  ${c.dim}•${c.reset} ${c.cyan}${type}${c.reset} — ${c.white}${comment}${c.reset}`);
+    }
+    console.log();
+  } else {
+    console.log(`  ${c.yellow}No authorized keys found yet.${c.reset}\n`);
+  }
+
+  // Add keys in a loop
+  while (true) {
+    console.log(`  ${c.white}Paste a public SSH key to authorize access to this server.${c.reset}`);
+    console.log(`  ${c.dim}(The key starts with ssh-ed25519, ssh-rsa, ecdsa-sha2, etc.)${c.reset}`);
+    const newKey = await ask(rl, `\n  ${c.cyan}SSH public key (or press Enter to finish): ${c.reset}`);
+
+    if (!newKey || !newKey.startsWith('ssh-') && !newKey.startsWith('ecdsa-')) {
+      if (newKey) console.log(`  ${c.yellow}That doesn't look like a public key. Skipping.${c.reset}`);
+      break;
+    }
+
+    try {
+      // Ensure .ssh directory exists
+      execSync(`mkdir -p ${homeDir}/.ssh`, { stdio: 'pipe' });
+
+      // Check for duplicates
+      let isDuplicate = false;
+      try {
+        const existing = execSync(`cat ${authKeysPath} 2>/dev/null`, { encoding: 'utf-8' });
+        const newKeyFingerprint = newKey.split(' ').slice(0, 2).join(' ');
+        isDuplicate = existing.split('\n').some(line => line.includes(newKeyFingerprint));
+      } catch { /* file doesn't exist yet */ }
+
+      if (isDuplicate) {
+        console.log(`\n  ${c.yellow}This key is already authorized. Skipping.${c.reset}\n`);
+        continue;
+      }
+
+      // Append the key
+      execSync(`echo '${newKey}' >> ${authKeysPath}`, { stdio: 'pipe' });
+      if (realUser !== 'root') {
+        execSync(`chown ${realUser}:${realUser} ${authKeysPath}`, { stdio: 'pipe' });
+      }
+      execSync(`chmod 600 ${authKeysPath}`, { stdio: 'pipe' });
+
+      const comment = newKey.split(' ').length >= 3 ? newKey.split(' ').slice(2).join(' ') : '';
+      console.log(`\n  ${icon.check} ${c.green}Key added${comment ? ` (${comment})` : ''}${c.reset}\n`);
+    } catch (err) {
+      console.log(`\n  ${icon.x} ${c.red}Failed to add key: ${err.message}${c.reset}\n`);
+    }
+
+    const addMore = await ask(rl, `  ${c.cyan}Add another key? (y/n): ${c.reset}`);
+    if (addMore.toLowerCase() !== 'y') break;
+    console.log();
+  }
+
+  // Also copy to root if running for a regular user
+  if (realUser !== 'root') {
+    try {
+      execSync(`mkdir -p /root/.ssh`, { stdio: 'pipe' });
+      execSync(`cp ${authKeysPath} /root/.ssh/authorized_keys`, { stdio: 'pipe' });
+      execSync(`chmod 600 /root/.ssh/authorized_keys`, { stdio: 'pipe' });
+      console.log(`\n  ${icon.check} ${c.green}Keys also synced to root account${c.reset}`);
+    } catch { /* non-critical */ }
+  }
+
+  await ask(rl, `\n  ${c.dim}Press Enter to continue...${c.reset}`);
+}
+
+// ── Generate Server SSH Key (for outbound SSH) ──
+async function generateServerSSHKey(rl) {
+  clearScreen();
+  printHeader();
+  console.log(`${c.bgCyan}${c.white}${c.bold}                                                ${c.reset}`);
+  console.log(`${c.bgCyan}${c.white}${c.bold}   🔑 Generate Server SSH Key                   ${c.reset}`);
+  console.log(`${c.bgCyan}${c.white}${c.bold}                                                ${c.reset}`);
+  console.log();
+  console.log(`  ${c.white}This generates an SSH key pair ${c.bold}on this server${c.reset}${c.white} so it can${c.reset}`);
+  console.log(`  ${c.white}SSH into other servers (agent-to-agent access, deployments, etc.).${c.reset}`);
+  console.log();
+
+  // Get the real user
+  let realUser;
+  try {
+    realUser = execSync('logname 2>/dev/null || echo root', { encoding: 'utf-8' }).trim();
+  } catch { realUser = 'root'; }
+  const homeDir = realUser === 'root' ? '/root' : `/home/${realUser}`;
+  const sshKeyPath = `${homeDir}/.ssh/id_ed25519`;
+
+  // Check for existing key
+  let keyExists = false;
+  try { execSync(`test -f ${sshKeyPath}`, { stdio: 'pipe' }); keyExists = true; } catch { /* doesn't exist */ }
+
+  if (keyExists) {
+    console.log(`  ${c.yellow}An SSH key already exists at ${sshKeyPath}${c.reset}`);
+    const existingKey = execSync(`cat ${sshKeyPath}.pub`, { encoding: 'utf-8' }).trim();
+    console.log(`  ${c.dim}${existingKey}${c.reset}`);
+    console.log();
+    const regen = await ask(rl, `  ${c.yellow}Generate a new key? This will ${c.bold}overwrite${c.reset}${c.yellow} the existing one. (y/n): ${c.reset}`);
+    if (regen.toLowerCase() !== 'y') {
+      // Show existing key with copy instructions
+      printServerKeyInstructions(existingKey, realUser);
+      await ask(rl, `\n  ${c.dim}Press Enter to continue...${c.reset}`);
+      return;
+    }
+  }
+
+  // Optional comment for the key
+  let hostname = 'server';
+  try { hostname = execSync('hostname', { encoding: 'utf-8' }).trim(); } catch { /* */ }
+  const defaultComment = `${realUser}@${hostname}`;
+  const comment = await ask(rl, `  ${c.cyan}Key comment (default: ${defaultComment}): ${c.reset}`);
+  const keyComment = comment || defaultComment;
+
+  console.log(`\n  ${c.cyan}Generating Ed25519 SSH key...${c.reset}`);
+  try {
+    execSync(`mkdir -p ${homeDir}/.ssh`, { stdio: 'pipe' });
+    execSync(`ssh-keygen -t ed25519 -C "${keyComment}" -f ${sshKeyPath} -N ""`, { stdio: 'pipe' });
+    if (realUser !== 'root') {
+      execSync(`chown ${realUser}:${realUser} ${sshKeyPath} ${sshKeyPath}.pub`, { stdio: 'pipe' });
+    }
+    execSync(`chmod 600 ${sshKeyPath}`, { stdio: 'pipe' });
+    console.log(`  ${icon.check} ${c.green}SSH key generated at ${sshKeyPath}${c.reset}`);
+
+    const pubKey = execSync(`cat ${sshKeyPath}.pub`, { encoding: 'utf-8' }).trim();
+    printServerKeyInstructions(pubKey, realUser);
+  } catch (err) {
+    console.log(`  ${icon.x} ${c.red}Failed to generate SSH key: ${err.message}${c.reset}`);
+  }
+
+  await ask(rl, `\n  ${c.dim}Press Enter to continue...${c.reset}`);
+}
+
+function printServerKeyInstructions(pubKey, user) {
+  console.log();
+  console.log(`${c.bgGreen}${c.white}${c.bold}  ╔══════════════════════════════════════════════╗  ${c.reset}`);
+  console.log(`${c.bgGreen}${c.white}${c.bold}  ║  SERVER'S PUBLIC KEY (copy this)             ║  ${c.reset}`);
+  console.log(`${c.bgGreen}${c.white}${c.bold}  ╚══════════════════════════════════════════════╝  ${c.reset}`);
+  console.log();
+  console.log(`  ${c.cyan}${c.bold}${pubKey}${c.reset}`);
+  console.log();
+  console.log(`${c.yellow}${c.bold}  To let this server SSH into another server:${c.reset}`);
+  console.log(`${c.white}  1. Copy the public key above${c.reset}`);
+  console.log(`${c.white}  2. On the ${c.bold}target${c.reset}${c.white} server, append it to ${c.cyan}~/.ssh/authorized_keys${c.reset}`);
+  console.log(`${c.white}     ${c.dim}echo 'PASTE_KEY_HERE' >> ~/.ssh/authorized_keys${c.reset}`);
+  console.log(`${c.white}  3. Or use the ${c.green}"Add SSH Key"${c.reset}${c.white} tool on the target server${c.reset}`);
+  console.log();
+  console.log(`${c.dim}  Test with: ssh ${user}@<target-server-ip>${c.reset}`);
+  console.log();
+}
+
 // ── OpenClaw post-install setup (idempotent — safe to re-run) ──
 async function setupOpenClaw(rl) {
   console.log();
@@ -1351,7 +1530,9 @@ function showCategoryMenu(rl) {
   const hasOpenClaw = isInstalled('openclaw');
   const hasGit = isInstalled('git');
   const hasWebServer = isInstalled('nginx') || isInstalled('apache2') || isInstalled('caddy');
-  if (hasOpenClaw || hasGit || hasWebServer) {
+  // SSH tools are always available
+  const showTools = hasOpenClaw || hasGit || hasWebServer || true;
+  if (showTools) {
     console.log();
     console.log(`${c.bold}${c.yellow}  TOOLS${c.reset}`);
     if (hasWebServer) {
@@ -1364,6 +1545,12 @@ function showCategoryMenu(rl) {
       menuMap[i] = { type: 'tool', tool: 'git-ssh' };
       i++;
     }
+    console.log(`  ${c.cyan}${c.bold}${i})${c.reset} 🔐 Add SSH Key  ${c.dim}Authorize another user, agent, or developer to SSH in${c.reset}`);
+    menuMap[i] = { type: 'tool', tool: 'add-ssh-key' };
+    i++;
+    console.log(`  ${c.cyan}${c.bold}${i})${c.reset} 🔑 Generate Server SSH Key  ${c.dim}Create a key so this server can SSH into others${c.reset}`);
+    menuMap[i] = { type: 'tool', tool: 'generate-server-key' };
+    i++;
     if (hasOpenClaw) {
       console.log(`  ${c.cyan}${c.bold}${i})${c.reset} 🤖 Configure OpenClaw Domain  ${c.dim}Add or change the domain for your OpenClaw portal${c.reset}`);
       menuMap[i] = { type: 'tool', tool: 'openclaw-domain' };
@@ -1531,6 +1718,10 @@ async function main() {
       await ask(rl, `\n  ${c.dim}Press Enter to continue...${c.reset}`);
     } else if (selected.type === 'tool' && selected.tool === 'add-website') {
       await addWebsite(rl);
+    } else if (selected.type === 'tool' && selected.tool === 'add-ssh-key') {
+      await addSSHKey(rl);
+    } else if (selected.type === 'tool' && selected.tool === 'generate-server-key') {
+      await generateServerSSHKey(rl);
     }
   }
 }

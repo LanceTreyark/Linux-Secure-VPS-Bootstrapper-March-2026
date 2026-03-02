@@ -158,6 +158,31 @@ When Lance's Stack completes installation, the installer:
 
 If a key already exists, you're given the option to reuse it or generate a new one.
 
+### Add SSH Key (TOOLS)
+
+Always available in the TOOLS section. Lets you authorize additional SSH public keys so other developers, agents, or servers can SSH into this machine.
+
+**Flow:**
+
+1. **Shows existing keys** — lists all currently authorized keys with their type and comment
+2. **Paste a public key** — validates format (must start with `ssh-` or `ecdsa-`)
+3. **Duplicate check** — skips keys that are already authorized
+4. **Appends to `~/.ssh/authorized_keys`** — with correct ownership and `chmod 600`
+5. **Loop** — prompts to add more keys until you're done
+6. **Syncs to root** — copies the updated `authorized_keys` to root's `.ssh/` so keys work for both accounts
+
+### Generate Server SSH Key (TOOLS)
+
+Always available in the TOOLS section. Generates an Ed25519 SSH key pair **on this server** so it can SSH out to other servers — useful for manager agents that need to connect to multiple VPS instances.
+
+**Flow:**
+
+1. **Checks for existing key** — shows the current key if one exists; offers to keep or overwrite
+2. **Key comment** — defaults to `user@hostname`; customizable
+3. **Generates Ed25519 key** — saved to `~/.ssh/id_ed25519` with `chmod 600`
+4. **Displays public key** — in a highlighted box for copying
+5. **Shows instructions** — how to add this key to the target server's `authorized_keys` (or use the "Add SSH Key" tool on the target)
+
 ### OpenClaw Setup
 
 When OpenClaw is installed (individually or via AI Stack), the installer runs a guided setup:

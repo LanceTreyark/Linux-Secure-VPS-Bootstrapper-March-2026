@@ -139,7 +139,9 @@ installer.mjs
 │   ├── setupOpenClawDomain(rl)      — Domain/webserver/certbot setup (reusable)
 │   ├── configureOpenClawDomain(rl)  — After-the-fact domain addition
 │   ├── setupOpenClaw(rl)            — Full OpenClaw + portal deployment
-│   └── addWebsite(rl)               — Static site creation with landing page
+│   ├── addWebsite(rl)               — Static site creation with landing page
+│   ├── addSSHKey(rl)                — Add public keys to authorized_keys
+│   └── generateServerSSHKey(rl)     — Create key pair for outbound SSH
 │
 ├── Web directory & config generators
 │   ├── createWebDirectory(domain)        — /var/www/<domain>/public_html + .env
@@ -174,9 +176,11 @@ installer.mjs
 - 🤖 AI: OpenClaw + Node.js + Git
 - 🔒 Security: Fail2ban + Auto Updates + Certbot
 
-**Contextual tools menu (TOOLS section):** The main menu shows a TOOLS section with options that appear based on installed software:
+**Contextual tools menu (TOOLS section):** The main menu always shows a TOOLS section. Some options appear based on installed software, while SSH tools are always available:
 - **Add a Website** — visible when any web server is installed. Creates a static site: domain prompt → web dir → landing page → static file config → Certbot SSL. Uses `createStaticNginxConfig()` / `createStaticApacheConfig()` / `createStaticCaddyConfig()` (not the OpenClaw reverse proxy configs).
 - **Git & SSH Key Setup** — visible when Git is installed. Configures Git globals and generates an Ed25519 SSH key for GitHub.
+- **Add SSH Key** — always visible. Adds public keys to `~/.ssh/authorized_keys` so other developers or agents can SSH into this server. Shows existing keys, validates format, deduplicates, and syncs keys to root.
+- **Generate Server SSH Key** — always visible. Generates an Ed25519 key pair on the server itself so it can SSH *out* to other servers (agent-to-agent access, automated deployments). Displays the public key with instructions for adding it to target servers.
 - **Configure OpenClaw Domain** — visible when OpenClaw is installed. Adds a domain to an existing OpenClaw setup using the same webserver/certbot/DNS flow.
 
 **Key design decisions:**

@@ -74,9 +74,11 @@ Features include:
 
 - **Preset stacks** — one-click bundles (Lance's Stack, Web Dev, LAMP, Docker, AI, Security)
 - **Individual packages** — browse by category (Web Servers, Databases, Runtimes, Dev Tools, AI, Security, Monitoring)
-- **TOOLS menu** — contextual utilities that appear based on what's installed:
+- **TOOLS menu** — utilities for managing your server:
   - **Add a Website** — creates a static site with a landing page, web server config, and SSL (requires a web server)
   - **Git & SSH Key Setup** — configures Git and generates an Ed25519 SSH key for GitHub (requires Git)
+  - **Add SSH Key** — authorize other developers or agents to SSH into this server
+  - **Generate Server SSH Key** — create a key so this server can SSH into other servers
   - **Configure OpenClaw Domain** — attach a domain to an existing OpenClaw installation (requires OpenClaw)
 
 ## Firewall Ports
