@@ -211,7 +211,7 @@ User → Nginx (:443) → Portal (:3000) → OpenClaw Gateway (:18789)
 |------------------|------------------------------------------------------------|
 | `server.mjs`     | Express server, Passport local strategy, TOTP 2FA, session config, proxy middleware |
 | `db/setup.mjs`   | Creates PostgreSQL role, database, `users` table (with `totp_secret`), `user_sessions` table, admin user |
-| `views/login.ejs` | EJS login page with dark theme, animated background, SVG icons |
+| `views/login.ejs` | EJS login page with dark theme, animated background, SVG icons, "Enable Authenticator App" checkbox |
 | `views/totp-verify.ejs` | 2FA code entry page (shown after password login when TOTP is enabled) |
 | `views/totp-setup.ejs` | 2FA setup/disable page with QR code, manual secret, and verification |
 | `public/css/login.css` | CSS with custom properties, animations, responsive design |
@@ -234,9 +234,13 @@ The portal supports optional TOTP-based 2FA using any authenticator app (Google 
 
 ```
 Login flow with 2FA:
-  POST /login (username + password)
+  POST /login (username + password + optional enable_2fa checkbox)
+    │
+    ├── TOTP not enabled + enable_2fa checked → redirect to /2fa/setup (QR code)
     │
     ├── TOTP not enabled → redirect to dashboard (/#token=xxx)
+    │
+    ├── TOTP enabled + enable_2fa checked → redirect to /2fa/verify (disable_2fa pre-checked)
     │
     └── TOTP enabled → redirect to /2fa/verify
           │
@@ -250,16 +254,17 @@ Setup flow:
   GET /2fa/setup → generates secret, shows QR code + manual key
   POST /2fa/enable (6-digit code) → verifies code, saves secret to DB
 
-Disable flow (two options):
-  1. On /2fa/verify: check "Disable 2FA" checkbox + enter correct code → removes totp_secret
-  2. On /2fa/setup: POST /2fa/disable (current password) → removes totp_secret from DB
+Disable flow (three options):
+  1. On /login: check "Enable Authenticator App" when 2FA is already on → verify page opens with disable pre-checked
+  2. On /2fa/verify: check "Disable 2FA" checkbox + enter correct code → removes totp_secret
+  3. On /2fa/setup: POST /2fa/disable (current password) → removes totp_secret from DB
 ```
 
 - The `requireAuth` middleware checks both `req.isAuthenticated()` and `req.session.totp_verified` — if TOTP is enabled but not yet verified this session, the user is redirected to `/2fa/verify`
 - Secrets are stored as Base32 strings in the `totp_secret` column (NULL = TOTP disabled)
 - QR codes are generated server-side via the `qrcode` library (Data URL) so no external API calls are made
-- Disabling 2FA can be done two ways: (1) on the verify page by checking "Disable 2FA after verification" and entering a valid code, or (2) on the setup page by entering the current password — both require proof of identity
-- Users access the setup page at `/2fa/setup` after logging in
+- Disabling 2FA can be done three ways: (1) on the login page by checking "Enable Authenticator App" when 2FA is already active — the verify page opens with the disable checkbox pre-checked, (2) on the verify page by manually checking "Disable 2FA after verification" and entering a valid code, or (3) on the setup page by entering the current password — all require proof of identity
+- Users access the setup page at `/2fa/setup` after logging in, or by checking "Enable Authenticator App" on the login page when 2FA is not yet enabled
 
 **Database schema:**
 ```sql
