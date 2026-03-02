@@ -2,6 +2,8 @@
 
 Base server configuration script for **Debian 13** that automates initial VPS setup, installs Node.js, and deploys an interactive package manager.
 
+> **New to SSH keys?** Read the [SSH Key Guide](SSH_Key_Guide.md) for step-by-step instructions on generating keys for Linux, macOS, and Windows.
+
 ## What This Script Does
 
 1. **Creates a sudo user** — prompts for username and password

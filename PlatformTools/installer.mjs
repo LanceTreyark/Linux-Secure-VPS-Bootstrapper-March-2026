@@ -88,7 +88,7 @@ const packages = {
 // ── Custom install commands for non-apt packages ─
 const customInstalls = {
   openclaw: {
-    install: 'curl -fsSL https://openclaw.ai/install.sh | bash',
+    install: 'echo "OpenClaw binary will be installed during the setup wizard..."',
     postInstall: (rl) => setupOpenClaw(rl),
   },
   pm2: {
@@ -108,9 +108,12 @@ const customInstalls = {
 const stacks = {
   lance: {
     name: "⭐ Lance's Stack",
-    desc: 'Nginx + PostgreSQL + Git + Node.js + Certbot  (+ Git SSH key setup)',
+    desc: 'Nginx + PostgreSQL + Git + Node.js + Certbot',
     packages: ['nginx', 'postgresql', 'git', 'nodejs', 'certbot'],
-    postInstall: (rl) => setupGitSSH(rl),
+    postInstall: async (rl) => {
+      const doSSH = await ask(rl, `\n  ${c.cyan}Set up Git SSH keys for GitHub? (y/n): ${c.reset}`);
+      if (doSSH.toLowerCase() === 'y') await setupGitSSH(rl);
+    },
   },
   webdev: {
     name: '🌐 Web Dev Stack',
@@ -452,6 +455,16 @@ async function setupOpenClaw(rl) {
 
   // ── Ask for domain ────────────────────────────
   const domain = await setupOpenClawDomain(rl);
+
+  // ── Install OpenClaw binary ────────────────────
+  console.log();
+  console.log(`  ${c.cyan}${c.bold}Installing OpenClaw gateway...${c.reset}`);
+  try {
+    execSync('curl -fsSL https://openclaw.ai/install.sh | bash', { stdio: 'inherit' });
+    console.log(`  ${icon.check} ${c.green}OpenClaw gateway installed${c.reset}`);
+  } catch {
+    console.log(`  ${icon.x} ${c.red}OpenClaw gateway installation failed. You can retry later.${c.reset}`);
+  }
 
   // ── Deploy OpenClaw Portal ────────────────────
   console.log();
@@ -833,12 +846,20 @@ function showCategoryMenu(rl) {
 
   // ── Tools section (contextual) ──────────────
   const hasOpenClaw = isInstalled('openclaw');
-  if (hasOpenClaw) {
+  const hasGit = isInstalled('git');
+  if (hasOpenClaw || hasGit) {
     console.log();
     console.log(`${c.bold}${c.yellow}  TOOLS${c.reset}`);
-    console.log(`  ${c.cyan}${c.bold}${i})${c.reset} 🌐 Configure OpenClaw Domain  ${c.dim}Add or change the domain for your OpenClaw portal${c.reset}`);
-    menuMap[i] = { type: 'tool', tool: 'openclaw-domain' };
-    i++;
+    if (hasGit) {
+      console.log(`  ${c.cyan}${c.bold}${i})${c.reset} 🔑 Git & SSH Key Setup  ${c.dim}Configure Git identity & generate SSH key for GitHub${c.reset}`);
+      menuMap[i] = { type: 'tool', tool: 'git-ssh' };
+      i++;
+    }
+    if (hasOpenClaw) {
+      console.log(`  ${c.cyan}${c.bold}${i})${c.reset} 🌐 Configure OpenClaw Domain  ${c.dim}Add or change the domain for your OpenClaw portal${c.reset}`);
+      menuMap[i] = { type: 'tool', tool: 'openclaw-domain' };
+      i++;
+    }
   }
 
   console.log();
@@ -996,6 +1017,9 @@ async function main() {
       await showPackageMenu(rl, selected.category, catKeys);
     } else if (selected.type === 'tool' && selected.tool === 'openclaw-domain') {
       await configureOpenClawDomain(rl);
+    } else if (selected.type === 'tool' && selected.tool === 'git-ssh') {
+      await setupGitSSH(rl);
+      await ask(rl, `\n  ${c.dim}Press Enter to continue...${c.reset}`);
     }
   }
 }

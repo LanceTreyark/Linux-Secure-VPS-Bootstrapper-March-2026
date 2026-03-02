@@ -7,6 +7,7 @@
 
 import pg from 'pg';
 import bcrypt from 'bcrypt';
+import { execSync } from 'child_process';
 import * as readline from 'readline';
 
 const DB_NAME = process.env.DB_NAME || 'openclaw_portal';
@@ -33,44 +34,34 @@ async function main() {
     process.exit(1);
   }
 
-  // ── Connect as postgres superuser to create DB & role ──
-  const superClient = new pg.Client({
-    user: 'postgres',
-    host: 'localhost',
-    database: 'postgres',
-    port: 5432,
-  });
-
+  // ── Create DB role and database using psql (peer auth via Unix socket) ──
   try {
-    await superClient.connect();
+    const roleExists = execSync(
+      `sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='${DB_USER}'"`,
+      { encoding: 'utf-8' }
+    ).trim();
 
-    // Create role if not exists
-    const roleCheck = await superClient.query(
-      "SELECT 1 FROM pg_roles WHERE rolname = $1", [DB_USER]
-    );
-    if (roleCheck.rowCount === 0) {
-      await superClient.query(`CREATE ROLE ${DB_USER} WITH LOGIN PASSWORD '${DB_PASS}'`);
+    if (roleExists !== '1') {
+      execSync(`sudo -u postgres psql -c "CREATE ROLE ${DB_USER} WITH LOGIN PASSWORD '${DB_PASS}'"`, { stdio: 'pipe' });
       console.log(`  ✅ Database role "${DB_USER}" created.`);
     } else {
       console.log(`  ✅ Database role "${DB_USER}" already exists.`);
     }
 
-    // Create database if not exists
-    const dbCheck = await superClient.query(
-      "SELECT 1 FROM pg_database WHERE datname = $1", [DB_NAME]
-    );
-    if (dbCheck.rowCount === 0) {
-      await superClient.query(`CREATE DATABASE ${DB_NAME} OWNER ${DB_USER}`);
+    const dbExists = execSync(
+      `sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'"`,
+      { encoding: 'utf-8' }
+    ).trim();
+
+    if (dbExists !== '1') {
+      execSync(`sudo -u postgres psql -c "CREATE DATABASE ${DB_NAME} OWNER ${DB_USER}"`, { stdio: 'pipe' });
       console.log(`  ✅ Database "${DB_NAME}" created.`);
     } else {
       console.log(`  ✅ Database "${DB_NAME}" already exists.`);
     }
-
-    await superClient.end();
   } catch (err) {
-    console.error(`  ❌ Superuser connection failed: ${err.message}`);
+    console.error(`  ❌ Database setup failed: ${err.message}`);
     console.log('  Make sure PostgreSQL is running and peer/trust auth is configured for postgres user.');
-    await superClient.end();
     rl.close();
     process.exit(1);
   }
