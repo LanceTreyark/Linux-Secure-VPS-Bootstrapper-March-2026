@@ -450,6 +450,209 @@ async function configureOpenClawDomain(rl) {
   await ask(rl, `\n  ${c.dim}Press Enter to continue...${c.reset}`);
 }
 
+// ── Add a static website with landing page ──────
+async function addWebsite(rl) {
+  clearScreen();
+  printHeader();
+  console.log(`${c.bgGreen}${c.white}${c.bold}                                                ${c.reset}`);
+  console.log(`${c.bgGreen}${c.white}${c.bold}   🌐 Add a New Website                         ${c.reset}`);
+  console.log(`${c.bgGreen}${c.white}${c.bold}                                                ${c.reset}`);
+  console.log();
+
+  const domain = await ask(rl, `  ${c.cyan}Enter the domain name (e.g., example.com): ${c.reset}`);
+  if (!domain || domain.length < 3 || !domain.includes('.')) {
+    console.log(`\n  ${c.yellow}Invalid or empty domain. Returning to menu.${c.reset}`);
+    await ask(rl, `\n  ${c.dim}Press Enter to continue...${c.reset}`);
+    return;
+  }
+
+  console.log(`\n  ${c.green}Domain: ${c.bold}${domain}${c.reset}`);
+
+  // ── Detect or install web server ────────────
+  const hasNginx = isInstalled('nginx');
+  const hasApache = isInstalled('apache2');
+  const hasCaddy = isInstalled('caddy');
+  let webserver = null;
+
+  if (hasNginx && hasApache) {
+    const pick = await ask(rl, `\n  ${c.cyan}Both Nginx & Apache2 installed. Use which? (1=Nginx, 2=Apache2): ${c.reset}`);
+    webserver = pick === '2' ? 'apache2' : 'nginx';
+  } else if (hasNginx) {
+    webserver = 'nginx';
+    console.log(`  ${icon.check} ${c.green}Nginx detected${c.reset}`);
+  } else if (hasApache) {
+    webserver = 'apache2';
+    console.log(`  ${icon.check} ${c.green}Apache2 detected${c.reset}`);
+  } else if (hasCaddy) {
+    webserver = 'caddy';
+    console.log(`  ${icon.check} ${c.green}Caddy detected${c.reset}`);
+  } else {
+    console.log(`\n  ${c.yellow}No web server installed.${c.reset}`);
+    console.log(`  ${c.cyan}${c.bold}1)${c.reset} Nginx  ${c.dim}(recommended)${c.reset}`);
+    console.log(`  ${c.cyan}${c.bold}2)${c.reset} Apache2`);
+    console.log(`  ${c.cyan}${c.bold}3)${c.reset} Caddy`);
+    const wsPick = await ask(rl, `\n  ${c.cyan}Select a web server to install (1-3): ${c.reset}`);
+    if (wsPick === '2') { webserver = 'apache2'; installPackage('apache2'); }
+    else if (wsPick === '3') { webserver = 'caddy'; installPackage('caddy'); }
+    else { webserver = 'nginx'; installPackage('nginx'); }
+  }
+
+  // ── Create web directory ────────────────────
+  createWebDirectory(domain);
+
+  // ── Deploy landing page ─────────────────────
+  const landingPage = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${domain}</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 50%, #16213e 100%);
+      color: #e4e4e7;
+    }
+    .container {
+      text-align: center;
+      padding: 3rem 2rem;
+      max-width: 600px;
+    }
+    .logo {
+      width: 80px;
+      height: 80px;
+      margin: 0 auto 2rem;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      border-radius: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2.5rem;
+      box-shadow: 0 8px 32px rgba(99, 102, 241, 0.3);
+    }
+    h1 {
+      font-size: 2.5rem;
+      font-weight: 700;
+      margin-bottom: 0.75rem;
+      background: linear-gradient(135deg, #c7d2fe, #e0e7ff);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    p {
+      color: #a1a1aa;
+      font-size: 1.125rem;
+      line-height: 1.6;
+      margin-bottom: 2rem;
+    }
+    .badge {
+      display: inline-block;
+      padding: 0.5rem 1.25rem;
+      border-radius: 9999px;
+      font-size: 0.875rem;
+      font-weight: 500;
+      background: rgba(99, 102, 241, 0.15);
+      color: #a5b4fc;
+      border: 1px solid rgba(99, 102, 241, 0.25);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="logo">🚀</div>
+    <h1>${domain}</h1>
+    <p>This site is live and ready. Edit the files at <code style="color:#818cf8">/var/www/${domain}/public_html/</code> to build something amazing.</p>
+    <span class="badge">Powered by Linux VPS Bootstrapper</span>
+  </div>
+</body>
+</html>`;
+
+  try {
+    // Write landing page (don't overwrite if user already has content)
+    const indexPath = `/var/www/${domain}/public_html/index.html`;
+    let hasContent = false;
+    try { execSync(`test -f ${indexPath}`, { stdio: 'pipe' }); hasContent = true; } catch { /* no index yet */ }
+    if (!hasContent) {
+      execSync(`cat > ${indexPath} << 'LANDING_EOF'\n${landingPage}\nLANDING_EOF`, { stdio: 'pipe' });
+      console.log(`  ${icon.check} ${c.green}Landing page created: ${indexPath}${c.reset}`);
+    } else {
+      console.log(`  ${icon.check} ${c.green}index.html already exists — not overwriting${c.reset}`);
+    }
+  } catch (err) {
+    console.log(`  ${icon.x} ${c.red}Failed to create landing page: ${err.message}${c.reset}`);
+  }
+
+  // ── Create web server config (static site) ──
+  if (webserver === 'nginx') {
+    createStaticNginxConfig(domain);
+  } else if (webserver === 'apache2') {
+    createStaticApacheConfig(domain);
+  } else if (webserver === 'caddy') {
+    createStaticCaddyConfig(domain);
+  }
+
+  // ── SSL via Certbot ─────────────────────────
+  if (webserver !== 'caddy') {
+    if (!isInstalled('certbot')) {
+      console.log(`\n  ${c.cyan}Installing Certbot for SSL...${c.reset}`);
+      installPackage('certbot');
+    }
+    if (webserver === 'nginx') {
+      runApt('install', 'python3-certbot-nginx');
+    } else if (webserver === 'apache2') {
+      runApt('install', 'python3-certbot-apache');
+    }
+
+    // DNS instructions
+    console.log();
+    console.log(`${c.bgRed}${c.white}${c.bold}  ╔══════════════════════════════════════════════╗  ${c.reset}`);
+    console.log(`${c.bgRed}${c.white}${c.bold}  ║  ⚠  REQUIRED: Add these DNS records first!   ║  ${c.reset}`);
+    console.log(`${c.bgRed}${c.white}${c.bold}  ╚══════════════════════════════════════════════╝  ${c.reset}`);
+    console.log();
+    let serverIP = 'YOUR_SERVER_IP';
+    try { serverIP = execSync("hostname -I | awk '{print $1}'", { encoding: 'utf-8' }).trim(); } catch { /* */ }
+    console.log(`  ${c.white}Go to your DNS provider and add:${c.reset}`);
+    console.log();
+    console.log(`  ${c.cyan}${c.bold}  Type   Name              Value${c.reset}`);
+    console.log(`  ${c.white}  ─────  ────────────────  ─────────────────${c.reset}`);
+    console.log(`  ${c.green}  A      ${domain.padEnd(16)}  ${serverIP}${c.reset}`);
+    console.log(`  ${c.green}  A      www.${(domain.length > 12 ? domain.substring(0, 12) + '…' : domain).padEnd(12)}  ${serverIP}${c.reset}`);
+    console.log();
+
+    const dnsReady = await ask(rl, `  ${c.cyan}${c.bold}Have you added the DNS records and are they propagated? (y/n): ${c.reset}`);
+    if (dnsReady.toLowerCase() === 'y') {
+      console.log(`\n  ${c.cyan}Running Certbot...${c.reset}\n`);
+      try {
+        if (webserver === 'nginx') {
+          execSync(`certbot --nginx -d ${domain} -d www.${domain} --non-interactive --agree-tos --redirect --register-unsafely-without-email`, NO_STDIN);
+        } else {
+          execSync(`certbot --apache -d ${domain} -d www.${domain} --non-interactive --agree-tos --redirect --register-unsafely-without-email`, NO_STDIN);
+        }
+        console.log(`\n  ${icon.check} ${c.green}${c.bold}SSL certificate obtained! ${domain} is now secured with HTTPS.${c.reset}`);
+      } catch {
+        console.log(`\n  ${icon.x} ${c.red}Certbot failed. You can retry later:${c.reset}`);
+        console.log(`  ${c.white}  sudo certbot --${webserver === 'nginx' ? 'nginx' : 'apache'} -d ${domain} -d www.${domain}${c.reset}`);
+      }
+    } else {
+      console.log(`\n  ${c.yellow}No problem! After DNS propagates, run:${c.reset}`);
+      console.log(`  ${c.white}  sudo certbot --${webserver === 'nginx' ? 'nginx' : 'apache'} -d ${domain} -d www.${domain}${c.reset}`);
+    }
+  } else {
+    console.log(`\n  ${c.dim}Caddy handles SSL automatically once DNS resolves.${c.reset}`);
+  }
+
+  console.log();
+  console.log(`  ${icon.rocket} ${c.green}${c.bold}Website ready: https://${domain}${c.reset}`);
+  console.log(`  ${c.dim}Edit files at: /var/www/${domain}/public_html/${c.reset}`);
+
+  await ask(rl, `\n  ${c.dim}Press Enter to continue...${c.reset}`);
+}
+
 // ── OpenClaw post-install setup (idempotent — safe to re-run) ──
 async function setupOpenClaw(rl) {
   console.log();
@@ -984,6 +1187,91 @@ function createCaddyConfig(domain) {
   }
 }
 
+// ── Static site config generators ───────────────
+function createStaticNginxConfig(domain) {
+  const config = [
+    `# Static site — ${domain}`,
+    'server {',
+    '    listen 80;',
+    `    server_name ${domain} www.${domain};`,
+    '',
+    `    root /var/www/${domain}/public_html;`,
+    '    index index.html index.htm;',
+    '',
+    '    location / {',
+    '        try_files $uri $uri/ =404;',
+    '    }',
+    '',
+    '    # Block access to .env and dotfiles',
+    '    location ~ /\\. {',
+    '        deny all;',
+    '    }',
+    '}',
+  ].join('\n');
+  const confPath = `/etc/nginx/sites-available/${domain}`;
+  const linkPath = `/etc/nginx/sites-enabled/${domain}`;
+  try {
+    execSync(`echo '${config.replace(/'/g, "'\\''")}' > ${confPath}`, { stdio: 'pipe' });
+    execSync(`ln -sf ${confPath} ${linkPath}`, { stdio: 'pipe' });
+    execSync('nginx -t', { stdio: 'pipe' });
+    execSync('systemctl reload nginx', { stdio: 'pipe' });
+    console.log(`  ${icon.check} ${c.green}Nginx static config created: ${confPath}${c.reset}`);
+  } catch (err) {
+    console.log(`  ${icon.x} ${c.red}Failed to configure Nginx: ${err.message}${c.reset}`);
+    console.log(`  ${c.dim}Config written to ${confPath} — check with: nginx -t${c.reset}`);
+  }
+}
+
+function createStaticApacheConfig(domain) {
+  const config = [
+    `# Static site — ${domain}`,
+    '<VirtualHost *:80>',
+    `    ServerName ${domain}`,
+    `    ServerAlias www.${domain}`,
+    '',
+    `    DocumentRoot /var/www/${domain}/public_html`,
+    '',
+    `    <Directory /var/www/${domain}/public_html>`,
+    '        Options -Indexes +FollowSymLinks',
+    '        AllowOverride All',
+    '        Require all granted',
+    '    </Directory>',
+    '',
+    '    # Block access to .env and dotfiles',
+    `    <Directory /var/www/${domain}>`,
+    '        <FilesMatch "^\\.">',
+    '            Require all denied',
+    '        </FilesMatch>',
+    '    </Directory>',
+    '',
+    `    ErrorLog \${APACHE_LOG_DIR}/${domain}-error.log`,
+    `    CustomLog \${APACHE_LOG_DIR}/${domain}-access.log combined`,
+    '</VirtualHost>',
+  ].join('\n');
+  const confPath = `/etc/apache2/sites-available/${domain}.conf`;
+  try {
+    execSync(`echo '${config.replace(/'/g, "'\\''")}' > ${confPath}`, { stdio: 'pipe' });
+    execSync(`a2ensite ${domain}.conf`, { stdio: 'pipe' });
+    execSync('systemctl reload apache2', { stdio: 'pipe' });
+    console.log(`  ${icon.check} ${c.green}Apache static config created: ${confPath}${c.reset}`);
+  } catch (err) {
+    console.log(`  ${icon.x} ${c.red}Failed to configure Apache: ${err.message}${c.reset}`);
+    console.log(`  ${c.dim}Config written to ${confPath}${c.reset}`);
+  }
+}
+
+function createStaticCaddyConfig(domain) {
+  const block = `\\n${domain} {\\n    root * /var/www/${domain}/public_html\\n    file_server\\n    @dotfiles path */.*\\n    respond @dotfiles 403\\n}\\n`;
+  try {
+    execSync(`echo '${block}' >> /etc/caddy/Caddyfile`, { stdio: 'pipe' });
+    execSync('systemctl reload caddy', { stdio: 'pipe' });
+    console.log(`  ${icon.check} ${c.green}Caddy static config appended to /etc/caddy/Caddyfile${c.reset}`);
+    console.log(`  ${c.dim}Caddy handles SSL automatically — no certbot needed.${c.reset}`);
+  } catch (err) {
+    console.log(`  ${icon.x} ${c.red}Failed to configure Caddy: ${err.message}${c.reset}`);
+  }
+}
+
 function clearScreen() {
   process.stdout.write('\x1bc');
 }
@@ -1062,16 +1350,22 @@ function showCategoryMenu(rl) {
   // ── Tools section (contextual) ──────────────
   const hasOpenClaw = isInstalled('openclaw');
   const hasGit = isInstalled('git');
-  if (hasOpenClaw || hasGit) {
+  const hasWebServer = isInstalled('nginx') || isInstalled('apache2') || isInstalled('caddy');
+  if (hasOpenClaw || hasGit || hasWebServer) {
     console.log();
     console.log(`${c.bold}${c.yellow}  TOOLS${c.reset}`);
+    if (hasWebServer) {
+      console.log(`  ${c.cyan}${c.bold}${i})${c.reset} 🌐 Add a Website  ${c.dim}Create a new site with landing page, config & SSL${c.reset}`);
+      menuMap[i] = { type: 'tool', tool: 'add-website' };
+      i++;
+    }
     if (hasGit) {
       console.log(`  ${c.cyan}${c.bold}${i})${c.reset} 🔑 Git & SSH Key Setup  ${c.dim}Configure Git identity & generate SSH key for GitHub${c.reset}`);
       menuMap[i] = { type: 'tool', tool: 'git-ssh' };
       i++;
     }
     if (hasOpenClaw) {
-      console.log(`  ${c.cyan}${c.bold}${i})${c.reset} 🌐 Configure OpenClaw Domain  ${c.dim}Add or change the domain for your OpenClaw portal${c.reset}`);
+      console.log(`  ${c.cyan}${c.bold}${i})${c.reset} 🤖 Configure OpenClaw Domain  ${c.dim}Add or change the domain for your OpenClaw portal${c.reset}`);
       menuMap[i] = { type: 'tool', tool: 'openclaw-domain' };
       i++;
     }
@@ -1235,6 +1529,8 @@ async function main() {
     } else if (selected.type === 'tool' && selected.tool === 'git-ssh') {
       await setupGitSSH(rl);
       await ask(rl, `\n  ${c.dim}Press Enter to continue...${c.reset}`);
+    } else if (selected.type === 'tool' && selected.tool === 'add-website') {
+      await addWebsite(rl);
     }
   }
 }
