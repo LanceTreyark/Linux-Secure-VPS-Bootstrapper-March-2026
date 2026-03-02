@@ -30,6 +30,8 @@ const c = {
   bgRed:   '\x1b[41m',
   bgBlue:  '\x1b[44m',
   bgMagenta: '\x1b[45m',
+  bgYellow: '\x1b[43m',
+  black:   '\x1b[30m',
 };
 
 const icon = {
