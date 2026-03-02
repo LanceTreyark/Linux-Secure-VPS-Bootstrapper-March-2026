@@ -1773,6 +1773,7 @@ async function setupOpenClaw(rl) {
           mode: 'local',
           port: 18789,
           bind: 'loopback',
+          trustedProxies: ['127.0.0.1'],
           auth: { token: authToken },
         },
       };

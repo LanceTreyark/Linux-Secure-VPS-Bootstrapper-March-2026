@@ -334,7 +334,12 @@ const openclawProxy = createProxyMiddleware({
       }
     },
     error: (err, req, res) => {
-      if (!res || res.headersSent) return;
+      // For WebSocket errors, res is a Socket not an HTTP response
+      if (!res || !res.writeHead) {
+        if (res && res.destroy) res.destroy();
+        return;
+      }
+      if (res.headersSent) return;
       res.writeHead(502, { 'Content-Type': 'text/html' });
       res.end(`
         <div style="font-family:system-ui;color:#e4e4e7;background:#0a0a0f;min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px">
