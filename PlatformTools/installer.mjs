@@ -403,6 +403,12 @@ async function setupOpenClawDomain(rl) {
     if (!resolvedIP) {
       try { resolvedIP = execSync(`host ${currentDomain} 2>/dev/null | grep 'has address' | head -1 | awk '{print $NF}'`, { encoding: 'utf-8' }).trim(); } catch { /* */ }
     }
+    if (!resolvedIP) {
+      try { resolvedIP = execSync(`getent hosts ${currentDomain} 2>/dev/null | awk '{print $1}'`, { encoding: 'utf-8' }).trim(); } catch { /* */ }
+    }
+    if (!resolvedIP) {
+      try { resolvedIP = execSync(`ping -c1 -W2 ${currentDomain} 2>/dev/null | head -1 | grep -oP '\\(\\K[0-9.]+'`, { encoding: 'utf-8' }).trim(); } catch { /* */ }
+    }
 
     if (!resolvedIP) {
       console.log(`\n  ${icon.x} ${c.red}${c.bold}DNS is NOT resolving for ${currentDomain}${c.reset}`);
@@ -927,6 +933,12 @@ async function repairOpenClaw(rl) {
         try { resolvedIP = execSync(`dig +short ${domain} 2>/dev/null | head -1`, { encoding: 'utf-8' }).trim(); } catch { /* */ }
         if (!resolvedIP) {
           try { resolvedIP = execSync(`host ${domain} 2>/dev/null | grep 'has address' | head -1 | awk '{print $NF}'`, { encoding: 'utf-8' }).trim(); } catch { /* */ }
+        }
+        if (!resolvedIP) {
+          try { resolvedIP = execSync(`getent hosts ${domain} 2>/dev/null | awk '{print $1}'`, { encoding: 'utf-8' }).trim(); } catch { /* */ }
+        }
+        if (!resolvedIP) {
+          try { resolvedIP = execSync(`ping -c1 -W2 ${domain} 2>/dev/null | head -1 | grep -oP '\\(\\K[0-9.]+'`, { encoding: 'utf-8' }).trim(); } catch { /* */ }
         }
 
         if (!resolvedIP) {
