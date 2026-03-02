@@ -8,6 +8,7 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 import bcrypt from 'bcryptjs';
 import pg from 'pg';
 import { fileURLToPath } from 'url';
+import { readFileSync, existsSync } from 'fs';
 import path from 'path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -18,6 +19,25 @@ const PORT = process.env.PORTAL_PORT || 3000;
 const OPENCLAW_PORT = process.env.OPENCLAW_PORT || 18789;
 const SESSION_SECRET = process.env.SESSION_SECRET || 'change-me-in-production';
 const DB_URL = process.env.DATABASE_URL || 'postgresql://openclaw_portal:openclaw_portal@localhost:5432/openclaw_portal';
+
+// ── Read OpenClaw dashboard token ───────────────
+let openclawToken = process.env.OPENCLAW_TOKEN || '';
+if (!openclawToken) {
+  try {
+    const cfgPath = path.join(process.env.HOME || '/root', '.openclaw', 'openclaw.json');
+    if (existsSync(cfgPath)) {
+      const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8'));
+      openclawToken = cfg.gateway?.auth?.token || cfg.token || cfg.api_token || cfg.dashboard_token || cfg.secret || '';
+      if (!openclawToken) {
+        // Try to find any string field that looks like a hex token
+        for (const [, v] of Object.entries(cfg)) {
+          if (typeof v === 'string' && /^[a-f0-9]{32,}$/i.test(v)) { openclawToken = v; break; }
+        }
+      }
+    }
+  } catch { /* token will remain empty */ }
+}
+if (openclawToken) console.log('  ✓ OpenClaw dashboard token loaded');
 
 // ── PostgreSQL pool ─────────────────────────────
 const pool = new pg.Pool({ connectionString: DB_URL });
@@ -106,7 +126,8 @@ app.post('/login', (req, res, next) => {
     }
     req.logIn(user, (err) => {
       if (err) return next(err);
-      res.redirect('/');
+      // Include OpenClaw dashboard token so the UI auto-authenticates
+      res.redirect(openclawToken ? `/#token=${openclawToken}` : '/');
     });
   })(req, res, next);
 });
@@ -122,14 +143,20 @@ app.use('/', requireAuth, createProxyMiddleware({
   target: `http://127.0.0.1:${OPENCLAW_PORT}`,
   changeOrigin: true,
   ws: true,
-  onError: (err, req, res) => {
-    res.status(502).send(`
-      <div style="font-family:system-ui;color:#e4e4e7;background:#0a0a0f;min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px">
-        <h2 style="color:#6366f1">OpenClaw Gateway Unavailable</h2>
-        <p style="color:#71717a">The gateway on port ${OPENCLAW_PORT} is not responding.</p>
-        <code style="color:#ef4444;font-size:13px">${err.message}</code>
-      </div>
-    `);
+  on: {
+    error: (err, req, res) => {
+      if (res.headersSent) return;
+      res.writeHead(502, { 'Content-Type': 'text/html' });
+      res.end(`
+        <div style="font-family:system-ui;color:#e4e4e7;background:#0a0a0f;min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px">
+          <h2 style="color:#6366f1">OpenClaw Gateway Unavailable</h2>
+          <p style="color:#71717a">The gateway on port ${OPENCLAW_PORT} is not responding.</p>
+          <p style="color:#71717a">Make sure OpenClaw is running: <code style="color:#a5b4fc">openclaw serve</code></p>
+          <code style="color:#ef4444;font-size:13px">${err.message}</code>
+          <p style="margin-top:20px"><a href="/" style="color:#818cf8">↻ Retry</a></p>
+        </div>
+      `);
+    },
   },
 }));
 

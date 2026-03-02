@@ -58,6 +58,22 @@ Linux-Secure-VPS-Bootstrapper-March-2026/
 
 **Runs once as root on a fresh Debian 13 server.** This is the only entry point for initial setup.
 
+**Delivery method — single-command installer:**
+
+The user never clones the repo. A one-liner in the README downloads the tarball from GitHub, extracts it to `/tmp`, and runs `start.sh`:
+
+```
+apt update && apt install -y curl && curl -fsSL https://github.com/LanceTreyark/Linux-Secure-VPS-Bootstrapper-March-2026/archive/refs/heads/main.tar.gz | tar -xz -C /tmp && bash /tmp/Linux-Secure-VPS-Bootstrapper-March-2026-main/start.sh
+```
+
+This means:
+- **No `git` required** — `git` is not installed on a stock Debian 13 VPS, so we use `curl` + `tar` instead of `git clone`
+- **Extracted path is predictable** — GitHub tarballs always extract to `<repo-name>-<branch>/`, so the path is `/tmp/Linux-Secure-VPS-Bootstrapper-March-2026-main/`
+- **`start.sh` locates `PlatformTools/` relative to itself** — it uses `$(dirname "$0")` to find sibling directories in the extracted tarball, then copies `PlatformTools/` to the new user's home directory
+- **Everything in `/tmp` is disposable** — after `start.sh` copies what it needs, the tarball extraction can be cleaned up
+
+If the repo is renamed, the one-liner URL, the extracted folder name in `start.sh`, and the README must all be updated to match.
+
 **Execution flow:**
 
 ```
@@ -158,8 +174,10 @@ installer.mjs
 - Zero dependencies — uses only Node.js built-ins (`child_process`, `readline`)
 - All UI is raw ANSI escape codes — no framework, no library
 - Everything runs synchronously via `execSync` except menu prompts
+- **`NO_STDIN` constant** — all `execSync` calls use `{ stdio: ['ignore', 'inherit', 'inherit'] }` instead of `{ stdio: 'inherit' }` to prevent child processes from stealing stdin, which would corrupt the `readline` interface and cause `ERR_USE_AFTER_CLOSE` crashes
 - Package detection uses `which` first, falls back to `dpkg -l`
 - Post-install hooks are async functions that receive the readline interface
+- The `setupOpenClaw()` function is **fully idempotent** — every step checks its current state before acting, so re-running after a partial failure (e.g., OOM kill) only completes what's missing
 
 ---
 
@@ -189,9 +207,10 @@ User → Nginx (:443) → Portal (:3000) → OpenClaw Gateway (:18789)
 - Express.js 4 with EJS templates
 - Passport.js with local strategy
 - PostgreSQL via `pg` + `connect-pg-simple` for sessions
-- `bcrypt` (12 rounds) for password hashing
-- `http-proxy-middleware` for proxying to OpenClaw with WebSocket support
+- `bcryptjs` (pure JS, 12 rounds) for password hashing — chosen over native `bcrypt` to avoid node-gyp/native compilation issues
+- `http-proxy-middleware` v3 for proxying to OpenClaw with WebSocket support (uses `on: { error }` event syntax, not the v2 `onError` property)
 - `dotenv` for environment configuration
+- On startup, reads the OpenClaw gateway token from `OPENCLAW_TOKEN` env var or `~/.openclaw/openclaw.json` and injects it into the login redirect URL (`/#token=xxx`) so the OpenClaw dashboard auto-authenticates after portal login
 
 **Database schema:**
 ```sql
@@ -230,6 +249,41 @@ user_sessions (
 | `portal-start`   | `sudo portal-ctl start`     |
 | `portal-stop`    | `sudo portal-ctl stop`      |
 | `portal-status`  | `sudo portal-ctl status`    |
+
+**OpenClaw gateway token flow:**
+
+The OpenClaw gateway generates its own auth token on first run. The portal needs this token so it can redirect users to `/#token=xxx` after login, which auto-authenticates them with the OpenClaw dashboard UI.
+
+```
+OpenClaw install → generates token → stored in ~/.openclaw/openclaw.json
+                                          │
+    setupOpenClaw step 12 ────────────────┘
+        │
+        ├── Try: read token from openclaw.json (gateway.auth.token)
+        ├── Fallback: prompt user to paste token or URL
+        │       └── Extracts token from URL like /#token=abc123
+        ├── Save to /opt/openclaw-portal/.env as OPENCLAW_TOKEN=xxx
+        │
+    Portal startup (server.mjs)
+        │
+        ├── Reads OPENCLAW_TOKEN from .env (preferred)
+        ├── Fallback: parses ~/.openclaw/openclaw.json
+        └── On login success → redirect to /#token=xxx
+```
+
+**Idempotent recovery design:**
+
+The `setupOpenClaw()` function is designed for 1GB VPS servers that may OOM-kill during `npm install`. Every step checks its current state before acting:
+- File/directory existence via `test -f` / `test -d` helpers
+- PostgreSQL database existence via `psql` query
+- Swap presence via `swapon --show`
+- Systemd service existence via file check
+
+On re-run, a recovery checklist shows ✅/❌ for each step, then only the incomplete steps execute. This means a user can safely re-run the OpenClaw option after a crash without re-prompting for credentials or re-deploying files.
+
+**PostgreSQL authentication:**
+
+The portal uses `sudo -u postgres psql` (Unix socket peer auth) for database setup in `db/setup.mjs`, not TCP connections via `pg.Client`. This avoids SASL/password authentication issues since the installer runs as root.
 
 ---
 
@@ -272,6 +326,15 @@ All sites deployed on this server follow a strict directory pattern:
 | 5432  | PostgreSQL              | No (localhost only)  |
 | 18789 | OpenClaw Gateway        | No (localhost only)  |
 
+**Service management:**
+
+| Service                        | Manager  | Unit/Script                          |
+|--------------------------------|----------|--------------------------------------|
+| OpenClaw Gateway               | systemd  | `openclaw-gateway.service`           |
+| OpenClaw Portal                | cron + portal-ctl | `/usr/local/bin/portal-ctl`  |
+| PostgreSQL                     | systemd  | `postgresql.service`                 |
+| Nginx                          | systemd  | `nginx.service`                      |
+
 New apps should pick ports in the 3001–9999 range and verify availability with `ss -tlnp` and `grep -r proxy_pass /etc/nginx/sites-enabled/`.
 
 ---
@@ -312,32 +375,55 @@ User SSHs as root
 User selects OpenClaw (AI Stack or individual)
         │
         ▼
-    curl install OpenClaw binary
+    setupOpenClaw(rl)  — fully idempotent, safe to re-run
         │
-        ▼
-    setupOpenClaw(rl)
+        ├── Recovery status check (shows ✅/❌ for each step if re-running)
         │
-        ├── setupOpenClawDomain(rl)
-        │       ├── Prompt for domain (or skip)
+        ├── 1. setupOpenClawDomain(rl)
+        │       ├── Detect existing domain from nginx config (skip prompt)
+        │       ├── Prompt for domain (or skip for IP-only access)
         │       ├── Detect/install web server
         │       ├── Generate reverse proxy config
-        │       ├── Install Certbot + get SSL
+        │       ├── Install Certbot + nginx/apache plugin + get SSL
         │       └── return domain
         │
-        ├── Deploy Portal
-        │       ├── Install PostgreSQL if missing
-        │       ├── Copy openclaw-portal/ → /opt/openclaw-portal/
-        │       ├── npm install --omit=dev
-        │       ├── Generate .env (random session secret)
-        │       ├── Prompt admin username/password
-        │       ├── Run db/setup.mjs
-        │       ├── Install portal-ctl to /usr/local/bin/
-        │       ├── Set up hourly cron job
-        │       └── Add aliases to .bashrc
+        ├── 2. Install PostgreSQL if missing, enable + start
         │
-        └── Start services
-                ├── openclaw gateway --port 18789
-                └── portal-ctl start
+        ├── 3. Deploy portal files to /opt/openclaw-portal/
+        │
+        ├── 4. npm install --omit=dev
+        │
+        ├── 5. Generate .env (random session secret, DB URL, ports)
+        │
+        ├── 6. Database & admin account
+        │       ├── Check if openclaw_portal DB already exists
+        │       ├── If not: prompt admin username/password
+        │       └── Run db/setup.mjs (uses sudo -u postgres psql peer auth)
+        │
+        ├── 7. Install portal-ctl to /usr/local/bin/
+        │
+        ├── 8. Set up hourly cron job (portal-ctl health)
+        │
+        ├── 9. Add aliases to .bashrc (portal-start/stop/status)
+        │
+        ├── 10. Start portal (portal-ctl start)
+        │
+        ├── 11. Install OpenClaw binary
+        │       ├── Install psmisc + lsof (needed for openclaw --force)
+        │       ├── Create 1GB swap if none exists (prevents OOM on small VPS)
+        │       └── curl -fsSL https://openclaw.ai/install.sh | bash
+        │
+        ├── 12. Capture gateway token
+        │       ├── Auto-read from ~/.openclaw/openclaw.json
+        │       ├── If not found: prompt user to paste URL or raw token
+        │       ├── Extract token from URL (#token=xxx) or use raw input
+        │       ├── Add 127.0.0.1 to gateway.trustedProxies in config
+        │       └── Save OPENCLAW_TOKEN to portal .env
+        │
+        └── 13. Create systemd service (openclaw-gateway.service)
+                ├── ExecStart=openclaw gateway --port 18789
+                ├── Restart=on-failure, runs as deploy user
+                └── systemctl enable + start
 ```
 
 ---
@@ -394,7 +480,7 @@ mystack: {
 - **No npm dependencies in `installer.mjs`** — it must run with only Node.js built-ins
 - **ES modules** — use `import`, not `require`
 - **ANSI colors** — use the `c` object, never hardcode escape sequences
-- **`execSync`** — all system commands are synchronous; async is only for user prompts
+- **`execSync`** — all system commands are synchronous; async is only for user prompts. **Always use the `NO_STDIN` constant** (`{ stdio: ['ignore', 'inherit', 'inherit'] }`) instead of `{ stdio: 'inherit' }` — the latter lets child processes steal stdin, which kills the readline interface
 - **Error handling** — wrap `execSync` in try/catch; never let the installer crash
 - **User prompts** — use the `ask(rl, question)` helper; return trimmed strings
 
@@ -424,10 +510,10 @@ This project is designed to run on a live Debian 13 VPS. There is no test suite 
 
 | File                  | Approx. Lines | Purpose              |
 |-----------------------|---------------|----------------------|
-| `start.sh`           | ~140          | VPS bootstrap        |
-| `installer.mjs`      | ~1000         | Package manager      |
-| `server.mjs`         | ~140          | Portal server        |
-| `db/setup.mjs`       | ~80           | DB schema setup      |
+| `start.sh`           | ~200          | VPS bootstrap        |
+| `installer.mjs`      | ~1235         | Package manager      |
+| `server.mjs`         | ~170          | Portal server        |
+| `db/setup.mjs`       | ~140          | DB schema setup      |
 | `portal-ctl.sh`      | ~85           | Process management   |
 | `login.ejs`          | ~100          | Login page template  |
 | `login.css`          | ~250          | Login page styles    |

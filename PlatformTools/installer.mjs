@@ -478,6 +478,7 @@ async function setupOpenClaw(rl) {
   const envExists = fileExists(`${portalDest}/.env`);
   const portalCtlExists = fileExists('/usr/local/bin/portal-ctl');
   const openclawInstalled = isInstalled('openclaw');
+  const gatewayServiceExists = fileExists('/etc/systemd/system/openclaw-gateway.service');
 
   // Show recovery status if re-running
   if (portalDeployed || openclawInstalled) {
@@ -487,6 +488,7 @@ async function setupOpenClaw(rl) {
     console.log(`  ${envExists ? icon.check + c.green : icon.x + c.red}.env config${c.reset}`);
     console.log(`  ${portalCtlExists ? icon.check + c.green : icon.x + c.red}portal-ctl script${c.reset}`);
     console.log(`  ${openclawInstalled ? icon.check + c.green : icon.x + c.red}OpenClaw binary${c.reset}`);
+    console.log(`  ${gatewayServiceExists ? icon.check + c.green : icon.x + c.red}Gateway systemd service${c.reset}`);
     console.log();
   }
 
@@ -685,6 +687,11 @@ async function setupOpenClaw(rl) {
     console.log(`${c.bgMagenta}${c.white}${c.bold}                                                ${c.reset}`);
     console.log();
 
+    // Install psmisc (provides fuser) + lsof — needed by OpenClaw's --force flag
+    try {
+      execSync('apt install -y psmisc lsof', NO_STDIN);
+    } catch { /* non-critical */ }
+
     // Ensure swap exists — OpenClaw npm install needs ~1GB and gets OOM-killed on small VPS
     let hasSwap = false;
     try { hasSwap = execSync('swapon --show 2>/dev/null', { encoding: 'utf-8' }).trim().length > 0; } catch { /* no swap */ }
@@ -711,6 +718,130 @@ async function setupOpenClaw(rl) {
     }
   } else {
     console.log(`\n  ${icon.check} ${c.green}OpenClaw gateway already installed${c.reset}`);
+  }
+
+  // ── 12. Capture OpenClaw gateway token for portal ──
+  const clawDir = `${homeDir}/.openclaw`;
+  const clawCfg = `${clawDir}/openclaw.json`;
+  let gatewayToken = '';
+
+  // Try to read the token OpenClaw already generated
+  try {
+    if (fileExists(clawCfg)) {
+      const raw = execSync(`cat ${clawCfg}`, { encoding: 'utf-8' });
+      const cfg = JSON.parse(raw);
+      // Check common token locations in the config
+      gatewayToken = cfg.gateway?.auth?.token || cfg.token || '';
+      if (!gatewayToken) {
+        for (const [, v] of Object.entries(cfg)) {
+          if (typeof v === 'string' && /^[a-f0-9]{32,}$/i.test(v)) { gatewayToken = v; break; }
+        }
+      }
+    }
+  } catch { /* will ask user below */ }
+
+  if (gatewayToken) {
+    console.log(`  ${icon.check} ${c.green}Gateway token found in config${c.reset}`);
+  } else if (isInstalled('openclaw')) {
+    // Token not in config — ask the user to paste it from the openclaw dashboard output
+    console.log();
+    console.log(`  ${c.yellow}${c.bold}OpenClaw dashboard token needed for portal login.${c.reset}`);
+    console.log(`  ${c.dim}You can find it in the OpenClaw startup output or by running:${c.reset}`);
+    console.log(`  ${c.white}  openclaw dashboard${c.reset}`);
+    console.log(`  ${c.dim}Paste the full URL or just the token (leave blank to skip):${c.reset}`);
+    const tokenInput = await ask(rl, `  ${c.cyan}Token or URL: ${c.reset}`);
+    if (tokenInput.trim()) {
+      // Extract token from URL like http://127.0.0.1:18789/#token=abc123 or just the raw token
+      const urlMatch = tokenInput.match(/[#?&]token=([a-f0-9]+)/i);
+      gatewayToken = urlMatch ? urlMatch[1] : tokenInput.trim();
+    }
+    if (gatewayToken) {
+      console.log(`  ${icon.check} ${c.green}Token captured: ${gatewayToken.slice(0, 8)}...${c.reset}`);
+    } else {
+      console.log(`  ${c.yellow}Skipped — you can add it later to ${portalDest}/.env as OPENCLAW_TOKEN=<token>${c.reset}`);
+    }
+  }
+
+  // Also set trustedProxies so OpenClaw accepts requests from our reverse proxy
+  if (isInstalled('openclaw') && fileExists(clawCfg)) {
+    try {
+      const raw = execSync(`cat ${clawCfg}`, { encoding: 'utf-8' });
+      const cfg = JSON.parse(raw);
+      let changed = false;
+      if (!cfg.gateway) cfg.gateway = {};
+      if (!cfg.gateway.trustedProxies) cfg.gateway.trustedProxies = [];
+      if (!cfg.gateway.trustedProxies.includes('127.0.0.1')) {
+        cfg.gateway.trustedProxies.push('127.0.0.1');
+        changed = true;
+      }
+      if (changed) {
+        execSync(`echo '${JSON.stringify(cfg, null, 2).replace(/'/g, "'\\''")}' > ${clawCfg}`, { stdio: 'pipe' });
+        console.log(`  ${icon.check} ${c.green}Trusted proxy 127.0.0.1 added to gateway config${c.reset}`);
+      }
+    } catch { /* non-critical */ }
+  }
+
+  // Write gateway token to portal .env so the proxy injects it into login redirects
+  if (gatewayToken && fileExists(`${portalDest}/.env`)) {
+    try {
+      const envContent = execSync(`cat ${portalDest}/.env`, { encoding: 'utf-8' });
+      if (envContent.includes('OPENCLAW_TOKEN=')) {
+        // Update existing token
+        execSync(`sed -i 's/^OPENCLAW_TOKEN=.*/OPENCLAW_TOKEN=${gatewayToken}/' ${portalDest}/.env`, { stdio: 'pipe' });
+      } else {
+        execSync(`echo 'OPENCLAW_TOKEN=${gatewayToken}' >> ${portalDest}/.env`, { stdio: 'pipe' });
+      }
+      console.log(`  ${icon.check} ${c.green}Gateway token saved to portal .env${c.reset}`);
+    } catch { /* non-critical */ }
+  }
+
+  // ── 13. OpenClaw systemd service ──────────────
+  let serviceExists = false;
+  try { serviceExists = fileExists('/etc/systemd/system/openclaw-gateway.service'); } catch { /* nope */ }
+
+  if (!serviceExists && isInstalled('openclaw')) {
+    let openclawBin = '';
+    try { openclawBin = execSync('which openclaw', { encoding: 'utf-8' }).trim(); } catch { /* not found */ }
+
+    if (openclawBin) {
+      const serviceUnit = [
+        '[Unit]',
+        'Description=OpenClaw Gateway',
+        'After=network.target postgresql.service',
+        'Wants=network.target',
+        '',
+        '[Service]',
+        'Type=simple',
+        `User=${realUser}`,
+        `Group=${realUser}`,
+        `WorkingDirectory=${homeDir}`,
+        `ExecStart=${openclawBin} gateway --port 18789`,
+        'Restart=on-failure',
+        'RestartSec=5',
+        `Environment=HOME=${homeDir}`,
+        `Environment=NODE_ENV=production`,
+        '',
+        '[Install]',
+        'WantedBy=multi-user.target',
+      ].join('\\n');
+
+      try {
+        execSync(`printf '${serviceUnit}' > /etc/systemd/system/openclaw-gateway.service`, { stdio: 'pipe' });
+        execSync('systemctl daemon-reload', { stdio: 'pipe' });
+        execSync('systemctl enable openclaw-gateway', { stdio: 'pipe' });
+        execSync('systemctl start openclaw-gateway', { stdio: 'pipe' });
+        console.log(`  ${icon.check} ${c.green}OpenClaw gateway systemd service created & started${c.reset}`);
+      } catch (err) {
+        console.log(`  ${icon.x} ${c.red}Failed to create systemd service: ${err.message}${c.reset}`);
+        console.log(`  ${c.dim}Start manually: openclaw gateway --port 18789${c.reset}`);
+      }
+    }
+  } else if (serviceExists) {
+    // Restart to pick up new auth config
+    try {
+      execSync('systemctl restart openclaw-gateway', { stdio: 'pipe' });
+      console.log(`  ${icon.check} ${c.green}OpenClaw gateway service restarted${c.reset}`);
+    } catch { /* non-critical */ }
   }
 
   console.log();
@@ -804,10 +935,16 @@ function createApacheConfig(domain) {
     `    DocumentRoot /var/www/${domain}/public_html`,
     '',
     '    ProxyPreserveHost On',
-    '    ProxyPass / http://127.0.0.1:18789/',
-    '    ProxyPassReverse / http://127.0.0.1:18789/',
+    '    ProxyPass / http://127.0.0.1:3000/',
+    '    ProxyPassReverse / http://127.0.0.1:3000/',
     '',
     '    RequestHeader set X-Forwarded-Proto "http"',
+    '',
+    '    # WebSocket support for OpenClaw dashboard',
+    '    RewriteEngine On',
+    '    RewriteCond %{HTTP:Upgrade} websocket [NC]',
+    '    RewriteCond %{HTTP:Connection} upgrade [NC]',
+    '    RewriteRule ^/?(.*) ws://127.0.0.1:3000/$1 [P,L]',
     '',
     '    # Block access to .env and dotfiles',
     '    <Directory /var/www/${domain}>',
@@ -823,7 +960,7 @@ function createApacheConfig(domain) {
   const confPath = `/etc/apache2/sites-available/${domain}.conf`;
   try {
     execSync(`echo '${config.replace(/'/g, "'\\''")}' > ${confPath}`, { stdio: 'pipe' });
-    execSync('a2enmod proxy proxy_http headers', { stdio: 'pipe' });
+    execSync('a2enmod proxy proxy_http proxy_wstunnel headers rewrite', { stdio: 'pipe' });
     execSync(`a2ensite ${domain}.conf`, { stdio: 'pipe' });
     execSync('systemctl reload apache2', { stdio: 'pipe' });
     console.log(`  ${icon.check} ${c.green}Apache config created: ${confPath}${c.reset}`);
