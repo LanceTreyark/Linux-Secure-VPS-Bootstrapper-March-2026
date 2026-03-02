@@ -183,10 +183,10 @@ installer.mjs
 - **Git & SSH Key Setup** — visible when Git is installed. Configures Git globals and generates an Ed25519 SSH key for GitHub.
 - **Add SSH Key** — always visible. Adds public keys to `~/.ssh/authorized_keys` so other developers or agents can SSH into this server. Shows existing keys, validates format, deduplicates, and syncs keys to root.
 - **Generate Server SSH Key** — always visible. Generates an Ed25519 key pair on the server itself so it can SSH *out* to other servers (agent-to-agent access, automated deployments). Displays the public key with instructions for adding it to target servers.
-- **Health Check & Repair** — visible when OpenClaw is installed. Runs 10 diagnostic checks (`repairOpenClaw(rl)`) and auto-fixes what it can: PostgreSQL, gateway service, portal (port 3000), OpenClaw config (`controlUi.allowedOrigins` + invalid key cleanup), portal `.env` (token, secrets), domain setup/change (calls `setupOpenClawDomain`, closes port 3000, updates origins, restarts services), web server config, SSL certificate (retry certbot if DNS resolves), portal-ctl + cron, and shell aliases. Reports a summary of issues found/fixed. Replaces the old separate "Configure OpenClaw Domain" tool.
+- **Health Check & Repair** — visible when OpenClaw is installed. Runs 10 diagnostic checks (`repairOpenClaw(rl)`) and auto-fixes what it can: PostgreSQL, gateway service, portal (port 3000), OpenClaw config (enforces `gateway.mode/port/bind`, recovers `auth.token` from portal `.env` if missing, ensures `trustedProxies`, `dangerouslyDisableDeviceAuth`, and `allowedOrigins`), portal `.env` (token, secrets), domain setup/change (calls `setupOpenClawDomain`, closes port 3000, updates origins, restarts services), web server config, SSL certificate (retry certbot if DNS resolves), portal-ctl + cron, and shell aliases (written via `appendFileSync`). Reports a summary of issues found/fixed. Replaces the old separate "Configure OpenClaw Domain" tool.
 
 **Key design decisions:**
-- Zero dependencies — uses only Node.js built-ins (`child_process`, `readline`)
+- Zero dependencies — uses only Node.js built-ins (`child_process`, `readline`, `fs`)
 - All UI is raw ANSI escape codes — no framework, no library
 - Everything runs synchronously via `execSync` except menu prompts
 - **`NO_STDIN` constant** — all `execSync` calls use `{ stdio: ['ignore', 'inherit', 'inherit'] }` instead of `{ stdio: 'inherit' }` to prevent child processes from stealing stdin, which would corrupt the `readline` interface and cause `ERR_USE_AFTER_CLOSE` crashes
