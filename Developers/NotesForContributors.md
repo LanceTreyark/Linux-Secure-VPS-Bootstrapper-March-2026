@@ -372,7 +372,7 @@ OpenClaw's Control UI generates a per-browser device identity (crypto keypair st
 }
 ```
 
-This is set automatically during setup (step 11b runs `openclaw configure` then overlays our gateway settings) and enforced by the health check (check 4). The "dangerously" prefix is OpenClaw's convention for security-downgrade flags — in our case it's safe because the portal IS the auth boundary.
+This is set automatically during setup (step 11b generates the gateway config, step 16 re-overlays after `openclaw configure`) and enforced by the health check (check 4). The "dangerously" prefix is OpenClaw's convention for security-downgrade flags — in our case it's safe because the portal IS the auth boundary.
 
 Without this flag, users would see "Disconnected from gateway" or "pairing required" errors when opening the dashboard in a new browser or incognito window.
 
@@ -522,10 +522,9 @@ User selects OpenClaw (AI Stack or individual)
         │       ├── Create 1GB swap if none exists (prevents OOM on small VPS)
         │       └── curl -fsSL https://openclaw.ai/install.sh | bash
         │
-        ├── 11b. Configure OpenClaw (model + API key + gateway settings)
-        │       ├── If no config: run `openclaw configure` interactively
-        │       │       (user picks AI model + enters API key)
-        │       ├── Overlay gateway settings on top of wizard output:
+        ├── 11b. Generate gateway config (minimal — no model needed yet)
+        │       ├── If no config: write minimal JSON with gateway settings only
+        │       ├── If config exists: overlay settings on top
         │       │       gateway.mode: 'local'
         │       │       gateway.port: 18789
         │       │       gateway.bind: 'loopback'
@@ -553,9 +552,17 @@ User selects OpenClaw (AI Stack or individual)
         │       ├── Re-read ACTUAL token from openclaw.json (gateway may change it on start)
         │       └── Update portal .env if token differs from what was written earlier
         │
-        └── 15. Final portal restart (after gateway is confirmed running)
-                ├── Kill old portal, sleep 1, portal-ctl start
-                └── Print "source ~/.bashrc" reminder for alias activation
+        ├── 15. Final portal restart (after gateway is confirmed running)
+        │       ├── Kill old portal, sleep 1, portal-ctl start
+        │       └── Print "source ~/.bashrc" reminder for alias activation
+        │
+        └── 16. Configure AI model + API key (openclaw configure — LAST STEP)
+                ├── Runs AFTER all infrastructure is in place
+                ├── Pauses installer readline, runs `openclaw configure` interactively
+                │       (user picks AI provider + completes auth flow e.g. device code)
+                ├── Re-overlays gateway settings (configure wizard may reset them)
+                ├── Preserves gateway auth token from portal .env
+                └── Restarts gateway via systemctl to pick up new model config
 ```
 
 ---
