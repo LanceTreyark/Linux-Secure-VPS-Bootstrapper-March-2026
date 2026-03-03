@@ -372,7 +372,7 @@ OpenClaw's Control UI generates a per-browser device identity (crypto keypair st
 }
 ```
 
-This is set automatically during setup (step 11b generates the gateway config, step 16 re-overlays after `openclaw configure`) and enforced by the health check (check 4). The "dangerously" prefix is OpenClaw's convention for security-downgrade flags — in our case it's safe because the portal IS the auth boundary.
+This is set automatically during setup (step 12a overlays gateway settings after the install script finishes) and enforced by the health check (check 4). The "dangerously" prefix is OpenClaw's convention for security-downgrade flags — in our case it's safe because the portal IS the auth boundary.
 
 Without this flag, users would see "Disconnected from gateway" or "pairing required" errors when opening the dashboard in a new browser or incognito window.
 
@@ -520,52 +520,35 @@ User selects OpenClaw (AI Stack or individual)
         ├── 11. Install OpenClaw binary
         │       ├── Install psmisc + lsof (needed for openclaw --force)
         │       ├── Create 1GB swap if none exists (prevents OOM on small VPS)
-        │       └── NONINTERACTIVE=1 CI=1 curl ... install.sh | bash
-        │           (env vars suppress install script's built-in configure wizard;
-        │            we run our own in step 16 after all infrastructure is ready)
+        │       └── curl -fsSL https://openclaw.ai/install.sh | bash
+        │           The install script runs its own `openclaw configure` wizard
+        │           (model selection, device auth, etc.). We do NOT touch the
+        │           config until after the install script finishes completely.
         │
-        ├── 11b. Generate gateway config (minimal — no model needed yet)
-        │       ├── If no config: write minimal JSON with gateway settings only
-        │       ├── If config exists: overlay settings on top
-        │       │       gateway.mode: 'local'
-        │       │       gateway.port: 18789
-        │       │       gateway.bind: 'loopback'
-        │       │       gateway.trustedProxies: ['127.0.0.1']
-        │       │       gateway.auth.token: <generated if missing>
-        │       │       gateway.controlUi.dangerouslyDisableDeviceAuth: true
-        │       └── Add domain controlUi.allowedOrigins if domain was configured
-        │
-        ├── 12. Capture gateway token + enforce gateway settings
-        │       ├── Auto-read token from ~/.openclaw/openclaw.json
-        │       ├── If not found: prompt user to paste URL or raw token
-        │       ├── Extract token from URL (#token=xxx) or use raw input
-        │       ├── Re-enforce gateway.mode/port/bind + controlUi settings
-        │       └── Save OPENCLAW_TOKEN to portal .env
-        │
-        ├── 13. Create systemd service (openclaw-gateway.service)
-        │       ├── Run `openclaw doctor --fix` to validate config before start
-        │       ├── ExecStart=openclaw gateway --port 18789
-        │       ├── Restart=on-failure, runs as deploy user
-        │       ├── systemctl enable + start (separate try blocks for create vs verify)
-        │       ├── Wait 3s and verify gateway stays active (`is-active || echo stopped`)
-        │       └── On failure: dump last 12 journal lines for debugging
-        │
-        ├── 14. Sync token after gateway start
-        │       ├── Re-read ACTUAL token from openclaw.json (gateway may change it on start)
-        │       └── Update portal .env if token differs from what was written earlier
-        │
-        ├── 15. Final portal restart (after gateway is confirmed running)
-        │       ├── Kill old portal, sleep 1, portal-ctl start
-        │       └── Print "source ~/.bashrc" reminder for alias activation
-        │
-        └── 16. Configure AI model + API key (openclaw configure — LAST STEP)
-                ├── ALWAYS runs `openclaw configure` interactively
-                │       (user picks AI provider + completes auth flow e.g. device code)
-                ├── Re-overlay gateway settings (configure wizard may overwrite config)
-                ├── Sync token: if configure changed the token, update portal .env
-                └── Restart gateway + portal to pick up final config
-                NOTE: The install script's wizard is suppressed (NONINTERACTIVE=1)
-                      because it runs too early and fails to persist credentials.
+        └── 12. Configure gateway + start everything (FINAL STEP)
+                Runs AFTER the install script finishes. All config/token work
+                happens here — writing config early breaks the install script.
+                │
+                ├── 12a. Overlay gateway settings on config created by install
+                │       gateway.mode: 'local', port: 18789, bind: 'loopback'
+                │       gateway.trustedProxies: ['127.0.0.1']
+                │       gateway.auth.token: <generated if missing>
+                │       gateway.controlUi.dangerouslyDisableDeviceAuth: true
+                │       gateway.controlUi.allowedOrigins (domain if configured)
+                │
+                ├── 12b. Save auth token to portal .env (OPENCLAW_TOKEN=xxx)
+                │
+                ├── 12c. Create systemd service (openclaw-gateway.service)
+                │       ├── Run `openclaw doctor --fix` to validate config
+                │       ├── ExecStart=openclaw gateway --port 18789
+                │       ├── Restart=on-failure, Environment=PATH=<current PATH>
+                │       ├── systemctl enable + start
+                │       └── Wait 3s, verify active, dump logs on failure
+                │
+                ├── 12d. Sync token (gateway may change it on first start)
+                │       Re-read token from config, update portal .env if different
+                │
+                └── 12e. Final portal restart (portal-ctl start)
 ```
 
 ---
