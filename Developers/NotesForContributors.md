@@ -517,38 +517,32 @@ User selects OpenClaw (AI Stack or individual)
         │
         ├── 10. Start portal (portal-ctl start)
         │
-        ├── 11. Install OpenClaw binary
+        ├── 11. Install OpenClaw binary (stdio: 'inherit' — wizard needs stdin)
         │       ├── Install psmisc + lsof (needed for openclaw --force)
         │       ├── Create 1GB swap if none exists (prevents OOM on small VPS)
+        │       ├── Pause our readline so install script's wizard can use stdin
         │       └── curl -fsSL https://openclaw.ai/install.sh | bash
         │           The install script runs its own `openclaw configure` wizard
         │           (model selection, device auth, etc.). We do NOT touch the
         │           config until after the install script finishes completely.
+        │           CRITICAL: Must use stdio:'inherit', NOT NO_STDIN — the wizard
+        │           needs stdin for interactive prompts (device codes, model pick).
         │
-        └── 12. Configure gateway + start everything (FINAL STEP)
-                Runs AFTER the install script finishes. All config/token work
-                happens here — writing config early breaks the install script.
+        └── 12. Post-install: overlay settings + start services (FINAL STEP)
+                Runs AFTER the install script is 100% done. All config/token
+                work happens here — writing config early breaks the install.
                 │
                 ├── 12a. Overlay gateway settings on config created by install
-                │       gateway.mode: 'local', port: 18789, bind: 'loopback'
-                │       gateway.trustedProxies: ['127.0.0.1']
-                │       gateway.auth.token: <generated if missing>
-                │       gateway.controlUi.dangerouslyDisableDeviceAuth: true
-                │       gateway.controlUi.allowedOrigins (domain if configured)
+                │       gateway.mode/port/bind, trustedProxies, auth token,
+                │       controlUi.dangerouslyDisableDeviceAuth, allowedOrigins
                 │
-                ├── 12b. Save auth token to portal .env (OPENCLAW_TOKEN=xxx)
+                ├── 12b. Create systemd service + start gateway
+                │       ExecStart=openclaw gateway --port 18789
+                │       Environment=PATH=<current PATH> (systemd has minimal PATH)
                 │
-                ├── 12c. Create systemd service (openclaw-gateway.service)
-                │       ├── Run `openclaw doctor --fix` to validate config
-                │       ├── ExecStart=openclaw gateway --port 18789
-                │       ├── Restart=on-failure, Environment=PATH=<current PATH>
-                │       ├── systemctl enable + start
-                │       └── Wait 3s, verify active, dump logs on failure
-                │
-                ├── 12d. Sync token (gateway may change it on first start)
-                │       Re-read token from config, update portal .env if different
-                │
-                └── 12e. Final portal restart (portal-ctl start)
+                └── 12c. Save token to portal .env + restart portal (LAST THING)
+                        Re-reads token from config (gateway may have changed it),
+                        writes OPENCLAW_TOKEN to portal .env, then portal-ctl start
 ```
 
 ---

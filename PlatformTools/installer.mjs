@@ -1770,32 +1770,32 @@ async function setupOpenClaw(rl) {
       }
     }
 
-    console.log(`  ${c.yellow}${c.bold}Installing OpenClaw gateway now — this may take a few minutes.${c.reset}`);
-    console.log(`  ${c.yellow}If the install fails, re-run the OpenClaw option from the menu to retry.${c.reset}`);
+    console.log(`  ${c.yellow}${c.bold}Installing OpenClaw — this includes model selection + API key setup.${c.reset}`);
+    console.log(`  ${c.yellow}Follow the prompts from the OpenClaw installer below.${c.reset}`);
     console.log();
+
+    // Pause our readline so the install script's configure wizard can use stdin.
+    // The install script runs `openclaw configure` which needs interactive input
+    // for model selection and device auth (e.g. GitHub Copilot code flow).
+    rl.pause();
     try {
-      execSync('curl -fsSL https://openclaw.ai/install.sh | bash', NO_STDIN);
-      console.log(`  ${icon.check} ${c.green}OpenClaw gateway installed${c.reset}`);
+      execSync('curl -fsSL https://openclaw.ai/install.sh | bash', { stdio: 'inherit' });
+      console.log(`\n  ${icon.check} ${c.green}OpenClaw gateway installed${c.reset}`);
     } catch {
-      console.log(`  ${icon.x} ${c.red}OpenClaw gateway installation failed.${c.reset}`);
-      console.log(`  ${c.yellow}Re-run the OpenClaw option from the Platform Installer to retry.${c.reset}`);
+      console.log(`\n  ${icon.x} ${c.red}OpenClaw gateway installation failed.${c.reset}`);
+      console.log(`  ${c.yellow}Re-run the OpenClaw option from the menu to retry.${c.reset}`);
       console.log(`  ${c.dim}Or manually: curl -fsSL https://openclaw.ai/install.sh | bash${c.reset}`);
     }
+    rl.resume();
   } else {
     console.log(`\n  ${icon.check} ${c.green}OpenClaw gateway already installed${c.reset}`);
   }
 
-  // ── 12. Configure gateway + start everything (FINAL STEP) ──
-  // The install script (step 11) runs `openclaw configure` which handles model
-  // selection and device auth (e.g. GitHub Copilot).  We do NOT touch the config
-  // until AFTER the install script finishes completely — writing config/tokens
-  // early breaks the install script's post-install validation.
-  //
-  // Now that install is done, we:
-  //   1. Overlay our gateway architecture settings (port, bind, trustedProxies, etc.)
-  //   2. Generate an auth token for portal↔gateway communication
-  //   3. Create systemd service + start gateway
-  //   4. Save token to portal .env + restart portal
+  // ── 12. Post-install: overlay gateway settings + start services ──
+  // We do NOT touch any config until the install script is 100% done.
+  // The install script handles model selection, device auth, and writes its own
+  // config. We only overlay the gateway architecture settings we need (port,
+  // bind, trustedProxies, controlUi) and set up systemd + portal token.
   const clawDir = `${homeDir}/.openclaw`;
   const clawCfg = `${clawDir}/openclaw.json`;
 
@@ -1805,67 +1805,54 @@ async function setupOpenClaw(rl) {
       execSync(`sudo -u ${realUser} mkdir -p ${clawDir}/workspace ${clawDir}/agents/main/agent ${clawDir}/agents/main/sessions`, { stdio: 'pipe' });
     } catch { /* non-critical */ }
 
-    // ── 12a. Overlay gateway settings ──
+    // ── 12a. Overlay gateway settings onto config the install script created ──
     let gatewayToken = '';
-    try {
-      let cfg = {};
-      if (fileExists(clawCfg)) {
-        const raw = execSync(`cat ${clawCfg}`, { encoding: 'utf-8' });
-        cfg = JSON.parse(raw);
-      }
-
-      if (!cfg.gateway) cfg.gateway = {};
-      cfg.gateway.mode = 'local';
-      cfg.gateway.port = 18789;
-      cfg.gateway.bind = 'loopback';
-
-      // Generate auth token if missing
-      if (!cfg.gateway.auth) cfg.gateway.auth = {};
-      if (!cfg.gateway.auth.token) {
-        try { cfg.gateway.auth.token = execSync('openssl rand -hex 24', { encoding: 'utf-8' }).trim(); } catch {
-          cfg.gateway.auth.token = [...Array(48)].map(() => Math.floor(Math.random() * 16).toString(16)).join('');
-        }
-      }
-      gatewayToken = cfg.gateway.auth.token;
-
-      // Trusted proxies — portal proxies from localhost
-      if (!cfg.gateway.trustedProxies) cfg.gateway.trustedProxies = [];
-      if (!cfg.gateway.trustedProxies.includes('127.0.0.1')) cfg.gateway.trustedProxies.push('127.0.0.1');
-
-      // Disable browser device-identity checks — our portal handles auth
-      if (!cfg.gateway.controlUi) cfg.gateway.controlUi = {};
-      cfg.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
-
-      // Add domain origins
-      if (domain) {
-        if (!cfg.gateway.controlUi.allowedOrigins) cfg.gateway.controlUi.allowedOrigins = [];
-        for (const o of [`https://${domain}`, `https://www.${domain}`]) {
-          if (!cfg.gateway.controlUi.allowedOrigins.includes(o)) cfg.gateway.controlUi.allowedOrigins.push(o);
-        }
-      }
-
-      execSync(`echo '${JSON.stringify(cfg, null, 2).replace(/'/g, "'\\''")}' > ${clawCfg}`, { stdio: 'pipe' });
-      execSync(`chown ${realUser}:${realUser} ${clawCfg}`, { stdio: 'pipe' });
-      console.log(`  ${icon.check} ${c.green}Gateway config ready (token: ${gatewayToken.slice(0, 8)}...)${c.reset}`);
-    } catch (err) {
-      console.log(`  ${icon.x} ${c.red}Config overlay failed: ${err.message}${c.reset}`);
-    }
-
-    // ── 12b. Save token to portal .env ──
-    if (gatewayToken && fileExists(`${portalDest}/.env`)) {
+    if (fileExists(clawCfg)) {
       try {
-        let envContent = readFileSync(`${portalDest}/.env`, 'utf-8');
-        if (envContent.includes('OPENCLAW_TOKEN=')) {
-          envContent = envContent.replace(/^OPENCLAW_TOKEN=.*$/m, `OPENCLAW_TOKEN=${gatewayToken}`);
-        } else {
-          envContent += `\nOPENCLAW_TOKEN=${gatewayToken}\n`;
+        const raw = execSync(`cat ${clawCfg}`, { encoding: 'utf-8' });
+        const cfg = JSON.parse(raw);
+
+        if (!cfg.gateway) cfg.gateway = {};
+        cfg.gateway.mode = 'local';
+        cfg.gateway.port = 18789;
+        cfg.gateway.bind = 'loopback';
+
+        // Generate auth token if the install script didn't create one
+        if (!cfg.gateway.auth) cfg.gateway.auth = {};
+        if (!cfg.gateway.auth.token) {
+          try { cfg.gateway.auth.token = execSync('openssl rand -hex 24', { encoding: 'utf-8' }).trim(); } catch {
+            cfg.gateway.auth.token = [...Array(48)].map(() => Math.floor(Math.random() * 16).toString(16)).join('');
+          }
         }
-        writeFileSync(`${portalDest}/.env`, envContent);
-        console.log(`  ${icon.check} ${c.green}Gateway token saved to portal .env${c.reset}`);
-      } catch { /* non-critical */ }
+        gatewayToken = cfg.gateway.auth.token;
+
+        // Trusted proxies — portal proxies from localhost
+        if (!cfg.gateway.trustedProxies) cfg.gateway.trustedProxies = [];
+        if (!cfg.gateway.trustedProxies.includes('127.0.0.1')) cfg.gateway.trustedProxies.push('127.0.0.1');
+
+        // Disable browser device-identity checks — our portal handles auth
+        if (!cfg.gateway.controlUi) cfg.gateway.controlUi = {};
+        cfg.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
+
+        // Add domain origins
+        if (domain) {
+          if (!cfg.gateway.controlUi.allowedOrigins) cfg.gateway.controlUi.allowedOrigins = [];
+          for (const o of [`https://${domain}`, `https://www.${domain}`]) {
+            if (!cfg.gateway.controlUi.allowedOrigins.includes(o)) cfg.gateway.controlUi.allowedOrigins.push(o);
+          }
+        }
+
+        execSync(`echo '${JSON.stringify(cfg, null, 2).replace(/'/g, "'\\''")}' > ${clawCfg}`, { stdio: 'pipe' });
+        execSync(`chown ${realUser}:${realUser} ${clawCfg}`, { stdio: 'pipe' });
+        console.log(`  ${icon.check} ${c.green}Gateway config ready (token: ${gatewayToken.slice(0, 8)}...)${c.reset}`);
+      } catch (err) {
+        console.log(`  ${icon.x} ${c.red}Config overlay failed: ${err.message}${c.reset}`);
+      }
+    } else {
+      console.log(`  ${c.yellow}No openclaw config found — run ${c.bold}openclaw configure${c.reset}${c.yellow} to set up${c.reset}`);
     }
 
-    // ── 12c. Create systemd service + start gateway ──
+    // ── 12b. Create systemd service + start gateway ──
     let serviceExists = false;
     try { serviceExists = fileExists('/etc/systemd/system/openclaw-gateway.service'); } catch { /* nope */ }
 
@@ -1928,34 +1915,35 @@ async function setupOpenClaw(rl) {
         } catch { /* verification non-critical */ }
       }
     } else {
-      // Service already exists — restart to pick up new config
       try {
         execSync('systemctl restart openclaw-gateway', { stdio: 'pipe' });
         console.log(`  ${icon.check} ${c.green}OpenClaw gateway service restarted${c.reset}`);
       } catch { /* non-critical */ }
     }
 
-    // ── 12d. Sync token (gateway may have changed it on start) ──
-    try {
-      if (fileExists(clawCfg) && fileExists(`${portalDest}/.env`)) {
+    // ── 12c. Save token to portal .env + restart portal (LAST THING) ──
+    // Token is saved only after gateway is running so nothing interferes
+    if (gatewayToken && fileExists(`${portalDest}/.env`)) {
+      // Re-read token in case gateway changed it on start
+      try {
         const raw = execSync(`cat ${clawCfg}`, { encoding: 'utf-8' });
         const cfg = JSON.parse(raw);
-        const currentToken = cfg.gateway?.auth?.token || '';
-        if (currentToken && currentToken !== gatewayToken) {
-          let envContent = readFileSync(`${portalDest}/.env`, 'utf-8');
-          if (envContent.includes('OPENCLAW_TOKEN=')) {
-            envContent = envContent.replace(/^OPENCLAW_TOKEN=.*$/m, `OPENCLAW_TOKEN=${currentToken}`);
-          } else {
-            envContent += `\nOPENCLAW_TOKEN=${currentToken}\n`;
-          }
-          writeFileSync(`${portalDest}/.env`, envContent);
-          gatewayToken = currentToken;
-          console.log(`  ${icon.check} ${c.green}Portal token synced with gateway${c.reset}`);
-        }
-      }
-    } catch { /* non-critical */ }
+        if (cfg.gateway?.auth?.token) gatewayToken = cfg.gateway.auth.token;
+      } catch { /* use what we have */ }
 
-    // ── 12e. Final portal restart ──
+      try {
+        let envContent = readFileSync(`${portalDest}/.env`, 'utf-8');
+        if (envContent.includes('OPENCLAW_TOKEN=')) {
+          envContent = envContent.replace(/^OPENCLAW_TOKEN=.*$/m, `OPENCLAW_TOKEN=${gatewayToken}`);
+        } else {
+          envContent += `\nOPENCLAW_TOKEN=${gatewayToken}\n`;
+        }
+        writeFileSync(`${portalDest}/.env`, envContent);
+        console.log(`  ${icon.check} ${c.green}Gateway token saved to portal .env${c.reset}`);
+      } catch { /* non-critical */ }
+    }
+
+    // Final portal restart — portal needs the token in .env before starting
     try {
       execSync('kill $(lsof -ti:3000) 2>/dev/null || true', { stdio: 'pipe' });
       execSync('sleep 1', { stdio: 'pipe' });
