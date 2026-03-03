@@ -24,6 +24,11 @@ const DB_URL = process.env.DATABASE_URL || 'postgresql://openclaw_portal:opencla
 
 // ── Read OpenClaw dashboard token ───────────────
 let openclawToken = process.env.OPENCLAW_TOKEN || '';
+// Support pasting a full URL — extract the token from /#token=xxx or ?token=xxx
+if (openclawToken && /[#?&]token=/i.test(openclawToken)) {
+  const m = openclawToken.match(/[#?&]token=([a-f0-9]+)/i);
+  if (m) openclawToken = m[1];
+}
 if (!openclawToken) {
   try {
     const cfgPath = path.join(process.env.HOME || '/root', '.openclaw', 'openclaw.json');
