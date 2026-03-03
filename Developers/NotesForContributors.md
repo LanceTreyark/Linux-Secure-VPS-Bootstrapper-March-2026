@@ -520,6 +520,10 @@ User selects OpenClaw (AI Stack or individual)
         ├── 11. Install OpenClaw binary (stdio: 'inherit' — wizard needs stdin)
         │       ├── Install psmisc + lsof (needed for openclaw --force)
         │       ├── Create 1GB swap if none exists (prevents OOM on small VPS)
+        │       ├── Enable systemd linger + XDG_RUNTIME_DIR for realUser
+        │       │   (the install script's wizard fails with "Systemd user
+        │       │    services are unavailable" without this — bails early,
+        │       │    doesn't save model/API key config)
         │       ├── Pause our readline so install script's wizard can use stdin
         │       └── curl -fsSL https://openclaw.ai/install.sh | bash
         │           The install script runs its own `openclaw configure` wizard
@@ -532,15 +536,24 @@ User selects OpenClaw (AI Stack or individual)
                 Runs AFTER the install script is 100% done. All config/token
                 work happens here — writing config early breaks the install.
                 │
-                ├── 12a. Overlay gateway settings on config created by install
+                ├── 12a. Create or overlay gateway config
+                │       Creates config from scratch if install wizard didn't.
                 │       gateway.mode/port/bind, trustedProxies, auth token,
                 │       controlUi.dangerouslyDisableDeviceAuth, allowedOrigins
                 │
-                ├── 12b. Create systemd service + start gateway
+                ├── 12b. Token prompt fallback
+                │       If no gateway token after 12a, asks user to paste
+                │       token or full dashboard URL (extracts token from URL)
+                │
+                ├── 12c. Stop user-level service + create system-level service
+                │       The install script created a user-level systemd service
+                │       (via linger). We stop/disable it and create our own
+                │       system-level service at /etc/systemd/system/ instead
+                │       (more reliable, survives reboots, visible to root).
                 │       ExecStart=openclaw gateway --port 18789
                 │       Environment=PATH=<current PATH> (systemd has minimal PATH)
                 │
-                └── 12c. Save token to portal .env + restart portal (LAST THING)
+                └── 12d. Save token to portal .env + restart portal (LAST THING)
                         Re-reads token from config (gateway may have changed it),
                         writes OPENCLAW_TOKEN to portal .env, then portal-ctl start
 ```
