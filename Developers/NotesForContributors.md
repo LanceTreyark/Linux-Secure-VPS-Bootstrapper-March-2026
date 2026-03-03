@@ -520,7 +520,9 @@ User selects OpenClaw (AI Stack or individual)
         ├── 11. Install OpenClaw binary
         │       ├── Install psmisc + lsof (needed for openclaw --force)
         │       ├── Create 1GB swap if none exists (prevents OOM on small VPS)
-        │       └── curl -fsSL https://openclaw.ai/install.sh | bash
+        │       └── NONINTERACTIVE=1 CI=1 curl ... install.sh | bash
+        │           (env vars suppress install script's built-in configure wizard;
+        │            we run our own in step 16 after all infrastructure is ready)
         │
         ├── 11b. Generate gateway config (minimal — no model needed yet)
         │       ├── If no config: write minimal JSON with gateway settings only
@@ -556,15 +558,14 @@ User selects OpenClaw (AI Stack or individual)
         │       ├── Kill old portal, sleep 1, portal-ctl start
         │       └── Print "source ~/.bashrc" reminder for alias activation
         │
-        └── 16. Finalize AI config + gateway sync (LAST STEP)
-                ├── Check if auth-profiles.json exists (install script may have
-                │       already run `openclaw configure` during step 11)
-                ├── If NOT configured: run `openclaw configure` interactively
+        └── 16. Configure AI model + API key (openclaw configure — LAST STEP)
+                ├── ALWAYS runs `openclaw configure` interactively
                 │       (user picks AI provider + completes auth flow e.g. device code)
-                ├── If already configured: skip wizard, print "already configured"
                 ├── Re-overlay gateway settings (configure wizard may overwrite config)
                 ├── Sync token: if configure changed the token, update portal .env
                 └── Restart gateway + portal to pick up final config
+                NOTE: The install script's wizard is suppressed (NONINTERACTIVE=1)
+                      because it runs too early and fails to persist credentials.
 ```
 
 ---

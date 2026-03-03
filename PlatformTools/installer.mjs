@@ -1774,7 +1774,11 @@ async function setupOpenClaw(rl) {
     console.log(`  ${c.yellow}If the install fails, re-run the OpenClaw option from the menu to retry.${c.reset}`);
     console.log();
     try {
-      execSync('curl -fsSL https://openclaw.ai/install.sh | bash', NO_STDIN);
+      // Suppress the install script's built-in onboarding/configure wizard.
+      // We run our own `openclaw configure` in step 16 after all infrastructure
+      // is in place — the install script's wizard runs too early (before
+      // systemd service, portal, etc.) and often fails to persist credentials.
+      execSync('NONINTERACTIVE=1 CI=1 curl -fsSL https://openclaw.ai/install.sh | NONINTERACTIVE=1 CI=1 bash', NO_STDIN);
       console.log(`  ${icon.check} ${c.green}OpenClaw gateway installed${c.reset}`);
     } catch {
       console.log(`  ${icon.x} ${c.red}OpenClaw gateway installation failed.${c.reset}`);
@@ -2089,39 +2093,31 @@ async function setupOpenClaw(rl) {
   console.log();
 
   // ── 16. Configure AI model + API key (LAST STEP) ──
-  // The install script (step 11) often runs `openclaw configure` automatically.
-  // If that already happened, auth-profiles.json will exist — skip the wizard.
-  // Either way, re-overlay our gateway settings and restart so everything is in sync.
+  // Always run `openclaw configure` here — this is the ONLY place it should run.
+  // The install script (step 11) has NONINTERACTIVE=1 set to suppress its own
+  // wizard, which fails to persist credentials when run that early.
   if (isInstalled('openclaw')) {
-    const authProfiles = `${clawDir}/agents/main/agent/auth-profiles.json`;
-    const alreadyConfigured = fileExists(authProfiles);
+    console.log();
+    console.log(`  ${c.bgCyan}${c.black}${c.bold}                                                ${c.reset}`);
+    console.log(`  ${c.bgCyan}${c.black}${c.bold}   ⚙️  OpenClaw Configuration Wizard              ${c.reset}`);
+    console.log(`  ${c.bgCyan}${c.black}${c.bold}                                                ${c.reset}`);
+    console.log();
+    console.log(`  ${c.cyan}Everything is installed and running.${c.reset}`);
+    console.log(`  ${c.cyan}Now select your AI model and complete authentication.${c.reset}`);
+    console.log(`  ${c.dim}The gateway will restart automatically after configuration.${c.reset}`);
+    console.log();
 
-    if (!alreadyConfigured) {
-      // No auth profile yet — the install script didn't run configure, so we do it
-      console.log();
-      console.log(`  ${c.bgCyan}${c.black}${c.bold}                                                ${c.reset}`);
-      console.log(`  ${c.bgCyan}${c.black}${c.bold}   ⚙️  OpenClaw Configuration Wizard              ${c.reset}`);
-      console.log(`  ${c.bgCyan}${c.black}${c.bold}                                                ${c.reset}`);
-      console.log();
-      console.log(`  ${c.cyan}Everything is installed and running.${c.reset}`);
-      console.log(`  ${c.cyan}Now select your AI model and complete authentication.${c.reset}`);
-      console.log(`  ${c.dim}The gateway will restart automatically after configuration.${c.reset}`);
-      console.log();
-
-      // Pause our readline so OpenClaw's wizard can use stdin
-      rl.pause();
-      try {
-        execSync(`sudo -u ${realUser} -H openclaw configure`, { stdio: 'inherit' });
-        console.log(`\n  ${icon.check} ${c.green}OpenClaw configuration complete${c.reset}`);
-      } catch {
-        console.log(`\n  ${c.yellow}OpenClaw wizard exited — you can run it later:${c.reset}`);
-        console.log(`  ${c.bold}  sudo -u ${realUser} -H openclaw configure${c.reset}`);
-        console.log(`  ${c.dim}  Then: openclaw-restart${c.reset}`);
-      }
-      rl.resume();
-    } else {
-      console.log(`  ${icon.check} ${c.green}AI model already configured during install (auth profile found)${c.reset}`);
+    // Pause our readline so OpenClaw's wizard can use stdin
+    rl.pause();
+    try {
+      execSync(`sudo -u ${realUser} -H openclaw configure`, { stdio: 'inherit' });
+      console.log(`\n  ${icon.check} ${c.green}OpenClaw configuration complete${c.reset}`);
+    } catch {
+      console.log(`\n  ${c.yellow}OpenClaw wizard exited — you can run it later:${c.reset}`);
+      console.log(`  ${c.bold}  sudo -u ${realUser} -H openclaw configure${c.reset}`);
+      console.log(`  ${c.dim}  Then: openclaw-restart${c.reset}`);
     }
+    rl.resume();
 
     // Re-overlay gateway settings — openclaw configure may have overwritten our config
     try {
