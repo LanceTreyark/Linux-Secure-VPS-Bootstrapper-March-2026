@@ -556,13 +556,15 @@ User selects OpenClaw (AI Stack or individual)
         │       ├── Kill old portal, sleep 1, portal-ctl start
         │       └── Print "source ~/.bashrc" reminder for alias activation
         │
-        └── 16. Configure AI model + API key (openclaw configure — LAST STEP)
-                ├── Runs AFTER all infrastructure is in place
-                ├── Pauses installer readline, runs `openclaw configure` interactively
+        └── 16. Finalize AI config + gateway sync (LAST STEP)
+                ├── Check if auth-profiles.json exists (install script may have
+                │       already run `openclaw configure` during step 11)
+                ├── If NOT configured: run `openclaw configure` interactively
                 │       (user picks AI provider + completes auth flow e.g. device code)
-                ├── Re-overlays gateway settings (configure wizard may reset them)
-                ├── Preserves gateway auth token from portal .env
-                └── Restarts gateway via systemctl to pick up new model config
+                ├── If already configured: skip wizard, print "already configured"
+                ├── Re-overlay gateway settings (configure wizard may overwrite config)
+                ├── Sync token: if configure changed the token, update portal .env
+                └── Restart gateway + portal to pick up final config
 ```
 
 ---
